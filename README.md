@@ -1,6 +1,6 @@
 # Arcade
 
-A keyboard-first browser arcade: classic games with a twist, quizzes, brain teasers, daily puzzles, and games that train real IT skills. Everything is static HTML, CSS and JavaScript with no build step, no server, and no outside requests.
+A keyboard-first browser arcade: classic games with a twist, quizzes, brain teasers, daily puzzles, and a few games for practicing IT basics. Everything is static HTML, CSS and JavaScript with no build step, no server, and no outside requests.
 
 ## Play
 
