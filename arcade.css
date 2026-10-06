@@ -1,6 +1,7 @@
 /* Shared arcade theme. Single dark theme by choice; every game links this file. */
 
-/* Fonts are bundled (SIL Open Font License, see fonts/OFL-*.txt) so pages make no outside requests. */
+/* Fonts are bundled (SIL Open Font License, see fonts/OFL-*.txt) so pages make no outside requests.
+   IBM Plex Mono is used unmodified, as its license requires for the reserved name "Plex". */
 @font-face { font-family: "Bungee"; font-style: normal; font-weight: 400; font-display: swap;
   src: url(fonts/bungee-latin-400-normal.woff2) format("woff2");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
@@ -8,17 +9,15 @@
   src: url(fonts/bungee-latin-ext-400-normal.woff2) format("woff2");
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
 @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap;
-  src: url(fonts/ibm-plex-mono-latin-400-normal.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap;
-  src: url(fonts/ibm-plex-mono-latin-ext-400-normal.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+  src: url(fonts/IBMPlexMono-Regular.woff2) format("woff2"); }
 @font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url(fonts/ibm-plex-mono-latin-600-normal.woff2) format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url(fonts/ibm-plex-mono-latin-ext-600-normal.woff2) format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+  src: url(fonts/IBMPlexMono-SemiBold.woff2) format("woff2"); }
+/* Symbols that neither text font has (hearts, shapes, check marks), from Noto Sans Symbols 2, so they
+   look the same on every device instead of falling back to whatever the system has. */
+@font-face { font-family: "Arcade Symbols"; font-style: normal; font-weight: 400 600; font-display: swap;
+  src: url(fonts/arcade-symbols.woff2) format("woff2");
+  unicode-range: U+232B, U+25A0, U+25A1, U+25B2, U+25B6, U+25BC, U+25C0, U+25C6, U+25CB, U+25CF, U+2605, U+2606, U+2661, U+2665, U+26A0, U+2713, U+2714, U+2715, U+2717, U+2718; }
+
 :root {
   color-scheme: dark;
   --ground: #0d1f2a;
@@ -32,8 +31,8 @@
   --good: #5ce0a0;
   --danger: #ff5c7a;
   --accent: var(--snake);
-  --display: "Bungee", "Arial Black", Impact, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  --display: "Arcade Symbols", "Bungee", "IBM Plex Mono", "Arial Black", Impact, sans-serif;
+  --mono: "Arcade Symbols", "IBM Plex Mono", ui-monospace, Consolas, monospace;
 }
 html, body { min-height: 100%; }
 body {
@@ -105,3 +104,10 @@ button.ghost { background: var(--ground); color: var(--ink); box-shadow: inset 0
 .keys { color: var(--muted); font-size: 0.75rem; margin: 0; line-height: 1.8; }
 kbd { font-family: var(--mono); border: 1px solid var(--grid); border-radius: 3px; padding: 0 4px; color: var(--ink); background: var(--ground); }
 a.back { color: var(--muted); font-size: 0.75rem; }
+
+/* Phones and tablets. Text boxes stay at 16px or larger so iOS doesn't zoom in when one is tapped,
+   and double-tap zoom is off on controls so quick repeated taps register as taps. */
+@media (pointer: coarse) {
+  input, textarea, select { font-size: max(16px, 1em); }
+}
+button, a, input, [role="button"], [tabindex] { touch-action: manipulation; }

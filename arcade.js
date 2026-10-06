@@ -27,6 +27,20 @@ window.Arcade = (() => {
     });
   }
 
+  // On touch screens, swap keyboard instructions (any .keys line with <kbd> in it) for the tap
+  // instructions in its data-touch attribute. An empty data-touch hides the line.
+  const touch = matchMedia('(hover: none) and (pointer: coarse)').matches;
+  if (touch) {
+    document.documentElement.classList.add('touch');
+    addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('.keys').forEach(p => {
+        if (!p.querySelector('kbd')) return;
+        const text = p.dataset.touch ?? 'Tap the buttons on screen to play, and tap a text box when you need to type.';
+        if (text) p.textContent = text; else p.hidden = true;
+      });
+    });
+  }
+
   // Seeded randomness, so daily puzzles are the same for everyone on the same date.
   const pad = n => String(n).padStart(2, '0');
   const dateKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -84,5 +98,6 @@ window.Arcade = (() => {
     },
     dailyResult: (game, date = dateKey()) => readJSON(`daily:${game}:${date}`),
     dailyStreak,
+    touch,
   };
 })();

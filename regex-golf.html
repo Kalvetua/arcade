@@ -16,6 +16,7 @@
   .strip button.skipped { color: var(--muted); }
   .strip button.cur { background: var(--accent); color: var(--ground); box-shadow: none; }
   .strip button:disabled { opacity: 0.35; cursor: default; }
+  @media (pointer: coarse) { .strip button { min-width: 40px; min-height: 40px; font-size: 0.95rem; } }
   .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
   #task { margin: 0; font-size: 1.05rem; font-weight: 600; line-height: 1.45; }
   .entry { display: flex; align-items: center; gap: 4px; background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); padding: 0 10px; }
@@ -68,7 +69,7 @@
     </div>
   </div>
 
-  <p class="keys">Type your pattern without slashes, or as <kbd>/pattern/flags</kbd> to use flags, and press <kbd>Enter</kbd> to submit it. Press <kbd>↑</kbd> in the input for a hint, <kbd>Enter</kbd> on an empty input to skip a level for zero points, and <kbd>PageUp</kbd> or <kbd>PageDown</kbd> to switch between unlocked levels. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <p class="keys" data-touch="Tap the box and type a pattern. Every word is checked as you type, and Enter on your keyboard submits it. Tap a level number to switch levels.">Type your pattern without slashes, or as <kbd>/pattern/flags</kbd> to use flags, and press <kbd>Enter</kbd> to submit it. Press <kbd>↑</kbd> in the input for a hint, <kbd>Enter</kbd> on an empty input to skip a level for zero points, and <kbd>PageUp</kbd> or <kbd>PageDown</kbd> to switch between unlocked levels. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
   <a class="back" href="index.html">← Back to all games</a>
 </div>
 

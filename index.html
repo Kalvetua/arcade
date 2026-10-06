@@ -29,6 +29,7 @@
   }
   .tab kbd { font-size: 0.72rem; }
   .tab .n { font-size: 0.75rem; color: var(--muted); }
+  .touch .tab kbd { display: none; }
   .tab[aria-selected="true"] { background: var(--board); color: var(--ink); box-shadow: inset 0 0 0 2px var(--ink); font-weight: 600; }
 
   .search { display: flex; align-items: center; gap: 10px; }
@@ -109,7 +110,7 @@
     <aside class="preview" id="preview" aria-live="polite"></aside>
   </div>
 
-  <p class="keys">Use <kbd>↑</kbd> and <kbd>↓</kbd> to choose a game and <kbd>Enter</kbd> to play it. Switch sections with <kbd>←</kbd> and <kbd>→</kbd> or the number keys <kbd>1</kbd> to <kbd>5</kbd>, and press <kbd>/</kbd> to search. From any game, press <kbd>Esc</kbd> to come back here.</p>
+  <p class="keys" data-touch="Tap a section, then tap a game to play it.">Use <kbd>↑</kbd> and <kbd>↓</kbd> to choose a game and <kbd>Enter</kbd> to play it. Switch sections with <kbd>←</kbd> and <kbd>→</kbd> or the number keys <kbd>1</kbd> to <kbd>5</kbd>, and press <kbd>/</kbd> to search. From any game, press <kbd>Esc</kbd> to come back here.</p>
   <p class="keys"><a href="credits.html" style="color: var(--muted)">Credits, licenses and privacy</a></p>
 </main>
 
@@ -130,7 +131,7 @@
 
   const GAMES = [
     { s: 'daily', file: 'word-guess.html?daily', title: 'Daily Word Guess', color: '#5ce0a0', daily: 'word-guess',
-      blurb: 'One five-letter word for everyone today. You have six guesses to find it.' },
+      blurb: 'One five-letter word for everyone today. You have seven guesses to find it.' },
     { s: 'daily', file: 'number-sequence.html?daily', title: 'Daily Sequence', color: '#7cc7ff', daily: 'sequence',
       blurb: 'Five number patterns that get harder as you go. Everyone gets the same five today.' },
     { s: 'daily', file: 'before-or-after.html?daily', title: 'Daily Before or After', color: '#f4b860', daily: 'before-after',
@@ -146,7 +147,7 @@
     { s: 'quiz', file: 'higher-lower.html', title: 'Higher or Lower', color: '#ff8a5c', key: 'higherLowerBest', bestLabel: 'Best streak',
       blurb: 'Is it bigger, older, or taller? Compare two things at a time and see how long a streak you can build.' },
     { s: 'quiz', file: 'word-guess.html', title: 'Word Guess', color: '#5ce0a0', key: 'wordGuessBest', bestLabel: 'Best streak',
-      blurb: 'Find the hidden five-letter word in six guesses, then keep going to build a winning streak.' },
+      blurb: 'Find the hidden five-letter word in seven guesses, then keep going to build a winning streak.' },
     { s: 'quiz', file: 'before-or-after.html', title: 'Before or After', color: '#f4b860', key: 'beforeAfterBest', bestLabel: 'Best score',
       blurb: 'Did it happen before or after? Place historical events in the right spot on a growing timeline. Three misplaced events end the game.' },
     { s: 'quiz', file: 'map-memory.html', title: 'Map From Memory', color: '#6fd3c6', key: 'mapMemoryBest', bestLabel: 'Best score',
@@ -188,6 +189,7 @@
   ];
 
   const $ = id => document.getElementById(id);
+  if (Arcade.touch) $('q').placeholder = 'Search all games';
   // The link to the main site only makes sense when hosted there, not when opened from disk.
   if (location.hostname.endsWith('github.io')) $('home').hidden = false;
   const fmt = n => n.toLocaleString('en-US');
@@ -308,7 +310,7 @@
     p.style.setProperty('--c', g.color);
     const sec = SECTIONS.find(s => s.id === g.s).name;
     p.innerHTML = `<p class="sec"></p><h2></h2><p class="blurb"></p><p class="stat">${status(g).long}</p>
-      <p class="play">Press <kbd>Enter</kbd> to play.</p>`;
+      <p class="play">${Arcade.touch ? 'Tap the game in the list to play it.' : 'Press <kbd>Enter</kbd> to play.'}</p>`;
     // The section name only adds information in search results; while browsing, the tab already says it.
     if (query) p.querySelector('.sec').textContent = sec; else p.querySelector('.sec').remove();
     p.querySelector('h2').textContent = g.title;

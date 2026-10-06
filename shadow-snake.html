@@ -3,6 +3,7 @@
 <meta name="robots" content="noindex, nofollow">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Shadow Snake</title>
+<link rel="stylesheet" href="arcade.css">
 <style>
   /* Layout: single-column arcade cabinet, HUD above board, controls below. Single dark theme by choice. */
   :root {
@@ -16,8 +17,8 @@
     --ghost: #b9a7ff;
     --food: #ffd166;
     --danger: #ff5c7a;
-    --display: "Bungee", "Arial Black", Impact, sans-serif;
-    --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    --display: "Arcade Symbols", "Bungee", "IBM Plex Mono", "Arial Black", Impact, sans-serif;
+    --mono: "Arcade Symbols", "IBM Plex Mono", ui-monospace, Consolas, monospace;
   }
   html, body { height: 100%; }
   body {
@@ -104,7 +105,7 @@
     <button class="down" data-d="down" type="button" aria-label="Move down">▼</button>
     <button class="right" data-d="right" type="button" aria-label="Move right">▶</button>
   </div>
-  <p class="keys">Steer with the arrow keys or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, and press <kbd>Space</kbd> or <kbd>P</kbd> to pause. Press <kbd>Enter</kbd> to start a new game. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <p class="keys" data-touch="Steer with the on-screen arrows or by swiping on the board.">Steer with the arrow keys or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, and press <kbd>Space</kbd> or <kbd>P</kbd> to pause. Press <kbd>Enter</kbd> to start a new game. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
   <p class="keys"><a class="back" href="index.html" style="color: var(--muted)">← Back to all games</a></p>
 </div>
 
