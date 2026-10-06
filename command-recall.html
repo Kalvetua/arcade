@@ -1,0 +1,1064 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Command Recall</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: wide cabinet, task text, a terminal-style input line, then feedback and a breakdown of the answer. */
+  :root { --accent: #7ee0ff; }
+  .cab { max-width: 700px; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 480px; }
+  .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #deckTag { color: var(--accent); }
+  #q { margin: 0; font-size: 1.08rem; line-height: 1.5; font-weight: 600; min-height: 3em; outline: none; }
+  .term {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--ground); border-radius: 4px; padding: 10px 12px;
+    box-shadow: inset 0 0 0 1px var(--grid);
+  }
+  .term:focus-within { box-shadow: inset 0 0 0 1px var(--grid), 0 0 0 3px var(--accent); }
+  .prompt { color: var(--accent); font-weight: 600; flex: none; white-space: nowrap; }
+  #cmd {
+    flex: 1; min-width: 0; background: transparent; border: 0; outline: none;
+    color: var(--ink); font: 400 1rem var(--mono); caret-color: var(--accent);
+  }
+  #cmd[readonly] { color: var(--muted); }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.95rem; font-weight: 600; }
+  #fb.right { color: var(--good); }
+  #fb.wrong { color: var(--danger); }
+  #ex { display: flex; flex-direction: column; gap: 10px; }
+  #canon {
+    display: block; background: var(--ground); border-left: 3px solid var(--accent);
+    padding: 8px 12px; font-size: 0.95rem; overflow-wrap: anywhere; white-space: pre-wrap;
+  }
+  #parts { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; font-size: 0.85rem; line-height: 1.5; color: var(--ink); }
+  #parts code { color: var(--accent); font-family: var(--mono); font-weight: 600; }
+  .ex-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .ex-row p { margin: 0; font-size: 0.8rem; color: var(--muted); }
+  #next:focus-visible, .deck:focus-visible, #go:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+  .overlay { justify-content: center; }
+  .overlay .choices { width: min(100%, 520px); }
+  .deck.sel { box-shadow: inset 0 0 0 2px var(--accent); background: color-mix(in srgb, var(--accent) 16%, var(--ground)); }
+  .deck small { display: block; color: var(--muted); font-size: 0.75rem; }
+  @media (max-width: 460px) { .panel { min-height: 600px; } }
+  @media (prefers-reduced-motion: no-preference) {
+    #fb.right, #fb.wrong { animation: pop 0.25s ease-out; }
+    @keyframes pop { from { transform: translateY(4px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+  }
+</style>
+
+<div class="cab">
+  <h1>Command Recall</h1>
+  <p class="rule">Read a task in plain English and type the command that does it. Each correct command is worth 100 points plus a speed bonus, and three wrong answers end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="deckTag">Linux shell</span><span id="num">Task 1</span></div>
+    <p id="q" tabindex="-1">Your first task will appear here.</p>
+    <label class="term"><span class="prompt" id="prompt">$</span><input id="cmd" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="Type your command" readonly></label>
+    <p id="fb" aria-live="polite"></p>
+    <div id="ex" hidden>
+      <code id="canon"></code>
+      <ul id="parts"></ul>
+      <div class="ex-row"><p id="nextHint">Press Enter to continue.</p><button id="next" type="button" class="ghost">Continue</button></div>
+    </div>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Press a number key to pick a deck, then press Enter. Type each command and press Enter to check it.</p>
+      <div class="choices" id="decks"></div>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">On the start screen, press <kbd>1</kbd>–<kbd>4</kbd> to choose a deck and <kbd>Enter</kbd> to begin. During a game, type the command and press <kbd>Enter</kbd> to submit it, then press <kbd>Enter</kbd> again to continue. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const KEY = 'commandRecallBest', LIVES = 3;
+
+  // ---------- Pattern helpers ----------
+  // J joins parts with spaces; any part may be an array of alternatives (cartesian product). '' parts vanish.
+  const J = (...parts) => parts.reduce((acc, p) => {
+    const alts = Array.isArray(p) ? p : [p], r = [];
+    for (const a of acc) for (const b of alts) r.push([a, b].filter(Boolean).join(' '));
+    return r;
+  }, ['']);
+  const perms = arr => arr.length <= 1 ? [arr] : arr.flatMap((x, i) => perms([...arr.slice(0, i), ...arr.slice(i + 1)]).map(r => [x, ...r]));
+  // P: the parts in any order (for options whose order does not matter).
+  const P = (...parts) => perms(parts).flatMap(pp => J(...pp));
+  // sf: a set of single-letter flags, combined or separate, in any order (e.g. -la, -al, -l -a, -a -l).
+  const sf = letters => {
+    const res = new Set();
+    for (const p of perms([...letters])) {
+      for (let mask = 0; mask < 1 << (p.length - 1); mask++) {
+        const groups = []; let g = p[0];
+        for (let i = 1; i < p.length; i++) { if (mask >> (i - 1) & 1) { groups.push(g); g = p[i]; } else g += p[i]; }
+        groups.push(g);
+        res.add(groups.map(x => '-' + x).join(' '));
+      }
+    }
+    return [...res];
+  };
+  // tar option clusters: the letters in any order (optionally with v), f last because it takes the file name.
+  const tarOpts = opsList => {
+    const res = new Set();
+    for (const ops of opsList) for (const set of [ops, ops + 'v']) {
+      for (const p of perms([...set])) { const c = p.join('') + 'f'; res.add('-' + c); res.add(c); }
+      for (const p of perms([...set].map(l => '-' + l))) res.add([...p, '-f'].join(' '));
+    }
+    return [...res];
+  };
+
+  // ---------- Command tokenizer ----------
+  // Splits a command like a shell would for comparison purposes: quotes are removed but remembered,
+  // operators (| > >> 2> && ;) become their own tokens, and PowerShell braces are split out.
+  const OPS = ['2>&1', '2>>', '2>', '&&', '>>', '|', '>', '<', ';'];
+  const SQ = '\u0002'; // a $ inside single quotes is literal, so it must not match an expanding $
+  function tokenize(src, ps, pat) {
+    const out = []; let cur = null; let i = 0;
+    const flush = () => { if (cur) { out.push(cur); cur = null; } };
+    const need = () => cur || (cur = { v: '', q: false, req: false, op: false });
+    while (i < src.length) {
+      const ch = src[i];
+      if (/\s/.test(ch)) { flush(); i++; continue; }
+      if (pat && ch === '~' && (src[i + 1] === '"' || src[i + 1] === "'")) { need().req = true; i++; continue; }
+      if (ch === '"' || ch === "'") {
+        const end = src.indexOf(ch, i + 1);
+        if (end < 0) return null;
+        let body = src.slice(i + 1, end);
+        if (ch === "'") body = body.replace(/\$/g, SQ);
+        const t = need(); t.v += body; t.q = true; i = end + 1; continue;
+      }
+      if (!ps && ch === '\\' && i + 1 < src.length) {
+        const t = need(); t.v += src[i + 1] === '$' ? SQ : src[i + 1]; t.q = true; i += 2; continue;
+      }
+      let op = null;
+      if (ch === '2' && !cur && src[i + 1] === '>') op = OPS.find(o => o[0] === '2' && src.startsWith(o, i));
+      else op = OPS.find(o => o[0] !== '2' && src.startsWith(o, i));
+      if (!op && ps && (ch === '{' || ch === '}')) op = ch;
+      if (op) { flush(); out.push({ v: op, q: false, req: false, op: true }); i += op.length; continue; }
+      need().v += ch; i++;
+    }
+    flush();
+    return out;
+  }
+
+  // Real PowerShell aliases on Windows (Windows PowerShell 5.1 and PowerShell 7).
+  const PS_ALIAS = {
+    'get-childitem': ['gci', 'ls', 'dir'],
+    'set-location': ['cd', 'sl', 'chdir'],
+    'get-location': ['gl', 'pwd'],
+    'get-content': ['gc', 'cat', 'type'],
+    'copy-item': ['cp', 'copy', 'cpi'],
+    'move-item': ['mv', 'move', 'mi'],
+    'rename-item': ['ren', 'rni'],
+    'remove-item': ['rm', 'del', 'erase', 'ri', 'rd', 'rmdir'],
+    'new-item': ['ni'],
+    'get-item': ['gi'],
+    'select-string': ['sls'],
+    'get-process': ['gps', 'ps'],
+    'stop-process': ['spps', 'kill'],
+    'sort-object': ['sort'],
+    'select-object': ['select'],
+    'where-object': ['where', '?'],
+    'measure-object': ['measure'],
+    'invoke-webrequest': ['iwr'],
+    'get-psdrive': ['gdr'],
+    'get-command': ['gcm'],
+    'get-help': ['help', 'man'],
+    'get-history': ['h', 'history', 'ghy'],
+    'get-service': ['gsv'],
+    'clear-host': ['cls', 'clear'],
+    'get-member': ['gm'],
+    'get-alias': ['gal'],
+    'write-output': ['echo', 'write'],
+    'test-netconnection': ['tnc'],
+    'get-netipconfiguration': ['gip'],
+  };
+
+  function compile(task) {
+    const ps = task.deck === 'ps';
+    const seen = new Set(), out = [];
+    for (const p of [task.c, ...task.ok]) {
+      if (p instanceof RegExp) { out.push(p); continue; }
+      if (seen.has(p)) continue;
+      seen.add(p);
+      const toks = tokenize(p, ps, true);
+      if (!toks) throw new Error(`Bad pattern: ${p}`);
+      out.push(toks.map(t => {
+        const v = ps ? t.v.toLowerCase() : t.v;
+        const alts = new Set([v]);
+        if (ps && !t.q && !t.op && PS_ALIAS[v]) PS_ALIAS[v].forEach(a => alts.add(a));
+        return { alts, req: t.req || (task.strict && p === task.c && t.q), op: t.op };
+      }));
+    }
+    return out;
+  }
+
+  function check(task, input) {
+    const ps = task.deck === 'ps';
+    let raw = input.trim().replace(/\s+/g, ' ');
+    if (!raw) return false;
+    const toks = tokenize(raw, ps, false);
+    if (!toks) return false;
+    if (!task.compiled) task.compiled = compile(task);
+    return task.compiled.some(p => {
+      if (p instanceof RegExp) return p.test(raw);
+      if (p.length !== toks.length) return false;
+      return p.every((pt, i) => {
+        const t = toks[i];
+        if (pt.op !== t.op) return false;
+        if (pt.req && !t.q) return false;
+        return pt.alts.has(ps ? t.v.toLowerCase() : t.v);
+      });
+    });
+  }
+
+  // ---------- Decks ----------
+  // Each task: lv (1 beginner, 2 intermediate), t (task), c (canonical command), ok (other accepted forms:
+  // strings compared token by token, or regexes tested on the whitespace-normalized input), x (parts of c explained).
+  // In patterns, ~"..." marks an argument that must be quoted (for example a glob that the shell would otherwise expand).
+  const T = (lv, t, c, ok, x) => ({ lv, t, c, ok: ok.flat(), x });
+  // strict: the quotes shown in the canonical command are required, not optional.
+  const S = task => Object.assign(task, { strict: true });
+
+  const LINUX = [
+    T(1, 'Print the full path of the directory you are currently in.', 'pwd', [], [
+      ['pwd', 'prints the working directory, which is the directory your shell is currently in.']]),
+    T(1, 'List every file in the current directory in long format, including hidden files whose names start with a dot.', 'ls -la',
+      [J('ls', [...sf('la'), ...sf('lA'), '-l --all', '--all -l', '-l --almost-all', '--almost-all -l'])], [
+      ['ls', 'lists the contents of a directory.'],
+      ['-l', 'switches to long format, which shows permissions, owner, size, and modification time.'],
+      ['-a', 'includes hidden entries whose names begin with a dot.']]),
+    T(1, 'Change into the directory /var/log.', 'cd /var/log', ['cd /var/log/'], [
+      ['cd', 'changes the current directory.'],
+      ['/var/log', 'is an absolute path, so it works no matter where you are now.']]),
+    T(1, 'Go to your home directory.', 'cd', ['cd ~', 'cd ~/', 'cd $HOME'], [
+      ['cd', 'with no argument takes you to your home directory, just like cd ~ does.']]),
+    T(1, 'Move up one level to the parent directory.', 'cd ..', ['cd ../'], [
+      ['cd', 'changes the current directory.'],
+      ['..', 'always refers to the parent of the current directory.']]),
+    T(2, 'Jump back to the directory you were in before your last cd.', 'cd -', [], [
+      ['cd', 'changes the current directory.'],
+      ['-', 'means the previous directory, which the shell remembers in the OLDPWD variable.']]),
+    T(1, 'Create a new directory named backups.', 'mkdir backups', [], [
+      ['mkdir', 'makes a new directory.'],
+      ['backups', 'is the name of the directory to create.']]),
+    T(1, 'Create the nested directories projects/site/css in one command, creating any missing parent directories.', 'mkdir -p projects/site/css',
+      [J('mkdir', ['-p', '--parents'], ['projects/site/css', 'projects/site/css/'])], [
+      ['mkdir', 'makes directories.'],
+      ['-p', 'creates any missing parent directories and does not complain if they already exist.'],
+      ['projects/site/css', 'is the full nested path to create.']]),
+    T(1, 'Create an empty file named notes.txt.', 'touch notes.txt', [], [
+      ['touch', 'creates an empty file if it does not exist, or updates its modification time if it does.'],
+      ['notes.txt', 'is the file to create.']]),
+    T(1, 'Copy config.yaml to a new file named config.yaml.bak.', 'cp config.yaml config.yaml.bak', [], [
+      ['cp', 'copies files.'],
+      ['config.yaml', 'is the source file.'],
+      ['config.yaml.bak', 'is the destination file name.']]),
+    T(1, 'Copy the directory photos and everything inside it to a new directory named photos-backup.', 'cp -r photos photos-backup',
+      [J('cp', ['-r', '-R', '-a', '--recursive'], ['photos', 'photos/'], 'photos-backup')], [
+      ['cp', 'copies files and directories.'],
+      ['-r', 'copies recursively, which is required for directories.'],
+      ['photos', 'is the source directory.'],
+      ['photos-backup', 'is the new copy, created because it does not exist yet.']]),
+    T(1, 'Rename the file draft.md to final.md.', 'mv draft.md final.md', [], [
+      ['mv', 'moves or renames files; renaming is just a move within the same directory.'],
+      ['draft.md', 'is the current name.'],
+      ['final.md', 'is the new name.']]),
+    T(1, 'Move report.pdf into the existing directory archive.', 'mv report.pdf archive/', ['mv report.pdf archive'], [
+      ['mv', 'moves files.'],
+      ['report.pdf', 'is the file to move.'],
+      ['archive/', 'is the destination directory, and the trailing slash makes it clear that it is a directory.']]),
+    T(1, 'Delete the file old.log.', 'rm old.log', [], [
+      ['rm', 'removes files permanently, without a trash can.'],
+      ['old.log', 'is the file to delete.']]),
+    T(1, 'Delete the directory build and everything inside it.', 'rm -r build',
+      [J('rm', [...sf('rf'), ...sf('Rf'), '-r', '-R', '--recursive', '--recursive --force', '--force --recursive'], ['build', 'build/'])], [
+      ['rm', 'removes files.'],
+      ['-r', 'removes directories and their contents recursively.'],
+      ['build', 'is the directory to delete.']]),
+    T(1, 'Remove the empty directory tmp.', 'rmdir tmp', ['rmdir tmp/', 'rm -d tmp', J('rm', ['-r', '-R', ...sf('rf')], 'tmp')], [
+      ['rmdir', 'removes a directory, but only if it is empty, which makes it a safe choice.'],
+      ['tmp', 'is the directory to remove.']]),
+    T(1, 'Print the contents of notes.txt to the terminal.', 'cat notes.txt', ['less notes.txt', 'more notes.txt'], [
+      ['cat', 'concatenates files and prints them, so with one file it simply shows that file.'],
+      ['notes.txt', 'is the file to show.']]),
+    T(1, 'Show the first 10 lines of access.log.', 'head -n 10 access.log',
+      ['head access.log', J('head', ['-10', '-n10', '--lines=10', '--lines 10'], 'access.log')], [
+      ['head', 'prints the beginning of a file.'],
+      ['-n 10', 'sets the number of lines to 10, which is also the default.'],
+      ['access.log', 'is the file to read.']]),
+    T(1, 'Show the last 20 lines of server.log.', 'tail -n 20 server.log',
+      [J('tail', ['-20', '-n20', '--lines=20', '--lines 20'], 'server.log')], [
+      ['tail', 'prints the end of a file.'],
+      ['-n 20', 'sets the number of lines to 20 instead of the default 10.'],
+      ['server.log', 'is the file to read.']]),
+    T(1, 'Follow server.log so that new lines appear on screen as they are written.', 'tail -f server.log',
+      [J('tail', ['-F', '--follow'], 'server.log')], [
+      ['tail', 'prints the end of a file.'],
+      ['-f', 'keeps the file open and prints new lines as they are appended, until you press Ctrl+C.'],
+      ['server.log', 'is the file to follow.']]),
+    T(1, 'Count the number of lines in data.csv.', 'wc -l data.csv',
+      ['wc --lines data.csv', 'wc -l < data.csv', 'cat data.csv | wc -l'], [
+      ['wc', 'counts lines, words, and bytes.'],
+      ['-l', 'limits the output to the line count.'],
+      ['data.csv', 'is the file to count.']]),
+    T(1, 'Show every line of app.log that contains the word error.', 'grep error app.log', ['grep -w error app.log'], [
+      ['grep', 'prints the lines that match a pattern.'],
+      ['error', 'is the pattern to search for.'],
+      ['app.log', 'is the file to search.']]),
+    T(1, 'Search app.log for timeout, ignoring the difference between uppercase and lowercase.', 'grep -i timeout app.log',
+      ['grep --ignore-case timeout app.log'], [
+      ['grep', 'prints the lines that match a pattern.'],
+      ['-i', 'makes the match case-insensitive, so Timeout and TIMEOUT also match.'],
+      ['timeout', 'is the pattern.'],
+      ['app.log', 'is the file to search.']]),
+    T(1, 'Search every file under the src directory, including subdirectories, for TODO.', 'grep -r TODO src',
+      [J('grep', ['-r', '-R', '--recursive', ...sf('rn'), ...sf('Rn')], 'TODO', ['src', 'src/'])], [
+      ['grep', 'prints the lines that match a pattern.'],
+      ['-r', 'searches directories recursively.'],
+      ['TODO', 'is the pattern.'],
+      ['src', 'is the directory to search.']]),
+    T(1, 'Show the lines of app.log that do not contain DEBUG.', 'grep -v DEBUG app.log', ['grep --invert-match DEBUG app.log'], [
+      ['grep', 'prints the lines that match a pattern.'],
+      ['-v', 'inverts the match, so only lines without the pattern are printed.'],
+      ['DEBUG', 'is the pattern to exclude.'],
+      ['app.log', 'is the file to search.']]),
+    T(2, 'Count how many lines in app.log contain WARN.', 'grep -c WARN app.log',
+      ['grep --count WARN app.log', 'grep WARN app.log | wc -l'], [
+      ['grep', 'prints the lines that match a pattern.'],
+      ['-c', 'prints only the number of matching lines instead of the lines themselves.'],
+      ['WARN', 'is the pattern.'],
+      ['app.log', 'is the file to search.']]),
+    T(2, 'Show the lines of app.py that contain def main, along with their line numbers.', 'grep -n "def main" app.py',
+      ['grep --line-number "def main" app.py'], [
+      ['grep', 'prints the lines that match a pattern.'],
+      ['-n', 'puts the line number in front of each match.'],
+      ['"def main"', 'is the pattern, quoted because it contains a space.'],
+      ['app.py', 'is the file to search.']]),
+    S(T(1, 'Find all files whose names end in .log, starting from the current directory.', 'find . -name "*.log"',
+      [J('find', ['.', ''], ['-name ~"*.log"', '-type f -name ~"*.log"', '-name ~"*.log" -type f'])], [
+      ['find', 'walks a directory tree and lists what matches the tests you give it.'],
+      ['.', 'is the starting directory, here the current one.'],
+      ['-name "*.log"', 'matches names ending in .log, and the quotes stop the shell from expanding the * itself.']])),
+    T(2, 'Find all directories named node_modules below the current directory.', 'find . -type d -name node_modules',
+      [J('find', ['.', ''], P('-type d', '-name node_modules'))], [
+      ['find', 'walks a directory tree and lists what matches.'],
+      ['.', 'is the starting directory.'],
+      ['-type d', 'keeps only directories.'],
+      ['-name node_modules', 'keeps only entries with exactly that name.']]),
+    T(2, 'Find files under /var/log that are larger than 100 MiB.', 'find /var/log -size +100M',
+      [J('find', ['/var/log', '/var/log/'], ['-size +100M', ...P('-type f', '-size +100M')])], [
+      ['find', 'walks a directory tree and lists what matches.'],
+      ['/var/log', 'is the starting directory.'],
+      ['-size +100M', 'keeps files bigger than 100 mebibytes, where + means more than and M means units of 1,048,576 bytes.']]),
+    T(1, 'Give everyone permission to execute the script deploy.sh.', 'chmod +x deploy.sh', ['chmod a+x deploy.sh', 'chmod ugo+x deploy.sh'], [
+      ['chmod', 'changes file permissions.'],
+      ['+x', 'adds execute permission, and with no u, g, or o in front it applies to everyone except bits blocked by your umask.'],
+      ['deploy.sh', 'is the file to change.']]),
+    T(2, 'Set the permissions of secrets.env so that only its owner can read and write it, and nobody else has any access.', 'chmod 600 secrets.env',
+      ['chmod 0600 secrets.env', 'chmod u=rw,go= secrets.env', 'chmod u=rw,g=,o= secrets.env'], [
+      ['chmod', 'changes file permissions.'],
+      ['600', 'is octal for rw------- because 6 is read (4) plus write (2) for the owner, and 0 gives the group and others nothing.'],
+      ['secrets.env', 'is the file to protect.']]),
+    T(2, 'Using octal notation, set the permissions of script.sh to rwxr-xr-x.', 'chmod 755 script.sh', ['chmod 0755 script.sh'], [
+      ['chmod', 'changes file permissions.'],
+      ['755', 'gives the owner 7 (read, write, and execute) and gives the group and others 5 (read and execute).'],
+      ['script.sh', 'is the file to change.']]),
+    T(2, 'Make the user alice the owner of report.pdf.', 'sudo chown alice report.pdf', ['chown alice report.pdf'], [
+      ['sudo', 'runs the command as root, which is normally required to give a file to another user.'],
+      ['chown', 'changes the owner of a file.'],
+      ['alice', 'is the new owner.'],
+      ['report.pdf', 'is the file to change.']]),
+    T(2, 'Recursively set both the owner and the group of /srv/www and everything in it to www-data.', 'sudo chown -R www-data:www-data /srv/www',
+      [J(['sudo', ''], 'chown', ['-R', '--recursive'], 'www-data:www-data', ['/srv/www', '/srv/www/'])], [
+      ['sudo', 'runs the command as root.'],
+      ['chown', 'changes the owner and group of files.'],
+      ['-R', 'applies the change to the directory and everything inside it.'],
+      ['www-data:www-data', 'is written as owner:group, so both are set to www-data.'],
+      ['/srv/www', 'is the directory to change.']]),
+    T(1, 'Show every process running on the system, not just the ones started from your terminal.', 'ps aux',
+      ['ps -ef', 'ps -e', 'ps -A', 'ps ax', 'ps -eF'], [
+      ['ps', 'reports a snapshot of running processes.'],
+      ['aux', 'uses BSD-style options to show all users (a), the user and resource columns (u), and processes without a terminal (x).']]),
+    T(1, 'List the running processes that mention nginx by filtering the full process list.', 'ps aux | grep nginx',
+      ['ps -ef | grep nginx', 'pgrep nginx', 'pgrep -a nginx', 'pgrep -l nginx'], [
+      ['ps aux', 'lists every running process.'],
+      ['|', 'is a pipe, which sends the output of the command on its left to the input of the command on its right.'],
+      ['grep nginx', 'keeps only the lines that contain nginx.']]),
+    T(1, 'Ask the process with ID 4321 to shut down gracefully.', 'kill 4321',
+      [J('kill', ['-15', '-TERM', '-SIGTERM', '-s TERM', '-s SIGTERM'], '4321')], [
+      ['kill', 'sends a signal to a process, and by default the signal is SIGTERM, a polite request to exit.'],
+      ['4321', 'is the process ID.']]),
+    T(1, 'Force the process with ID 4321 to stop immediately.', 'kill -9 4321',
+      [J('kill', ['-KILL', '-SIGKILL', '-s KILL', '-s SIGKILL'], '4321')], [
+      ['kill', 'sends a signal to a process.'],
+      ['-9', 'selects SIGKILL, which the process cannot catch or ignore.'],
+      ['4321', 'is the process ID.']]),
+    T(2, 'Terminate every process named firefox in one command, without looking up process IDs.', 'pkill firefox', ['killall firefox'], [
+      ['pkill', 'sends SIGTERM to every process whose name matches the pattern.'],
+      ['firefox', 'is the name pattern to match.']]),
+    T(1, 'Send exactly 4 ping packets to example.com to check whether it is reachable.', 'ping -c 4 example.com',
+      ['ping -c4 example.com', 'ping example.com -c 4'], [
+      ['ping', 'sends ICMP echo requests and reports the replies and round-trip times.'],
+      ['-c 4', 'stops after 4 packets; without it, Linux ping keeps going until you press Ctrl+C.'],
+      ['example.com', 'is the host to test.']]),
+    T(1, 'Fetch only the HTTP response headers from https://example.com.', 'curl -I https://example.com',
+      [J('curl', ['-I', '--head', '-sI', '-Is', '-s -I', '-I -s'], ['https://example.com', 'https://example.com/'])], [
+      ['curl', 'transfers data to or from a URL.'],
+      ['-I', 'sends a HEAD request, so the server returns the headers without the body.'],
+      ['https://example.com', 'is the URL to request.']]),
+    T(2, 'Download https://example.com/file.zip and save it under its original file name.', 'curl -O https://example.com/file.zip',
+      [J('curl', ['--remote-name', '-LO', '-OL', '-L -O', '-O -L'], 'https://example.com/file.zip'), 'wget https://example.com/file.zip'], [
+      ['curl', 'transfers data from a URL.'],
+      ['-O', 'saves the download to a local file named like the last part of the URL, here file.zip.'],
+      ['https://example.com/file.zip', 'is the URL to download.']]),
+    T(1, 'Show the free and used space on all mounted filesystems in human-readable units.', 'df -h', ['df --human-readable', 'df -H'], [
+      ['df', 'reports disk space usage per filesystem.'],
+      ['-h', 'prints sizes in units like G and M instead of raw 1K blocks.']]),
+    T(1, 'Show the total size of the downloads directory as a single human-readable number.', 'du -sh downloads',
+      [J('du', [...sf('sh'), ...P('--summarize', '--human-readable')], ['downloads', 'downloads/'])], [
+      ['du', 'estimates how much disk space files and directories use.'],
+      ['-s', 'prints only a summary total instead of a line for every subdirectory.'],
+      ['-h', 'uses human-readable units.'],
+      ['downloads', 'is the directory to measure.']]),
+    T(2, 'Create a gzip-compressed tar archive named site.tar.gz containing the directory site.', 'tar -czf site.tar.gz site',
+      [J('tar', tarOpts(['cz']), 'site.tar.gz', ['site', 'site/'])], [
+      ['tar', 'creates and extracts archives.'],
+      ['-c', 'creates a new archive.'],
+      ['-z', 'compresses it with gzip.'],
+      ['-f site.tar.gz', 'names the archive file, so f must come right before the file name.'],
+      ['site', 'is what goes into the archive.']]),
+    T(2, 'Extract the archive backup.tar.gz into the current directory.', 'tar -xzf backup.tar.gz',
+      [J('tar', tarOpts(['xz', 'x']), 'backup.tar.gz')], [
+      ['tar', 'creates and extracts archives.'],
+      ['-x', 'extracts files from the archive.'],
+      ['-z', 'decompresses gzip, although GNU tar can also detect this on its own when extracting.'],
+      ['-f backup.tar.gz', 'names the archive to read.']]),
+    T(2, 'List the files inside archive.tar.gz without extracting them.', 'tar -tzf archive.tar.gz',
+      [J('tar', tarOpts(['tz', 't']), 'archive.tar.gz')], [
+      ['tar', 'creates and extracts archives.'],
+      ['-t', 'lists the contents of the archive.'],
+      ['-z', 'handles gzip compression.'],
+      ['-f archive.tar.gz', 'names the archive to read.']]),
+    T(1, 'Print the value of the PATH environment variable.', 'echo $PATH', ['echo ${PATH}', 'printenv PATH'], [
+      ['echo', 'prints its arguments.'],
+      ['$PATH', 'is replaced by the shell with the value of PATH, the list of directories searched for commands.']]),
+    T(1, 'Set the environment variable EDITOR to vim so that this shell and the programs it starts can see it.', 'export EDITOR=vim', [], [
+      ['export', 'marks a variable so that child processes inherit it.'],
+      ['EDITOR=vim', 'assigns the value, and there must be no spaces around the equals sign.']]),
+    T(1, 'List all environment variables and their values.', 'env', ['printenv'], [
+      ['env', 'with no arguments prints every environment variable as NAME=value.']]),
+    T(1, 'Save the output of ls -l to files.txt, replacing whatever the file contained before.', 'ls -l > files.txt', [], [
+      ['ls -l', 'lists the directory in long format.'],
+      ['>', 'redirects standard output to a file, creating or overwriting it.'],
+      ['files.txt', 'is the file that receives the output.']]),
+    T(1, 'Add the line Backup finished to the end of backup.log without erasing what is already there.', 'echo "Backup finished" >> backup.log',
+      ['echo Backup finished >> backup.log'], [
+      ['echo "Backup finished"', 'prints the text followed by a newline.'],
+      ['>>', 'redirects output to a file and appends instead of overwriting.'],
+      ['backup.log', 'is the file to append to.']]),
+    T(2, 'Run make and send its error messages (standard error) to errors.txt.', 'make 2> errors.txt', [], [
+      ['make', 'runs the build defined in the Makefile.'],
+      ['2>', 'redirects file descriptor 2, which is standard error, while normal output still goes to the screen.'],
+      ['errors.txt', 'is the file that receives the errors.']]),
+    T(1, 'Count the entries in the current directory by piping the output of ls into wc.', 'ls | wc -l', ['ls -1 | wc -l'], [
+      ['ls', 'lists the directory, one name per line when its output goes into a pipe.'],
+      ['|', 'is a pipe that feeds the output of ls into wc.'],
+      ['wc -l', 'counts the lines it receives.']]),
+    T(2, 'Print the lines of names.txt sorted alphabetically, with duplicate lines removed.', 'sort -u names.txt',
+      ['sort --unique names.txt', 'sort names.txt | uniq'], [
+      ['sort', 'sorts lines of text.'],
+      ['-u', 'outputs only the first of each run of equal lines, which removes duplicates.'],
+      ['names.txt', 'is the file to sort.']]),
+    T(1, 'Open the manual page for grep.', 'man grep', [], [
+      ['man', 'shows the manual for a command; press q to quit.'],
+      ['grep', 'is the command to look up.']]),
+    T(1, 'Show the path of the python3 program that runs when you type python3.', 'which python3', ['command -v python3'], [
+      ['which', 'searches the directories in PATH and prints the first match.'],
+      ['python3', 'is the command to locate.']]),
+    T(2, 'Create a symbolic link named latest that points to releases/v2.1.', 'ln -s releases/v2.1 latest', ['ln --symbolic releases/v2.1 latest'], [
+      ['ln', 'creates links.'],
+      ['-s', 'makes it a symbolic link instead of a hard link.'],
+      ['releases/v2.1', 'is the target that the link points to, and it comes first.'],
+      ['latest', 'is the name of the new link.']]),
+    T(2, 'Search your shell history for commands that contain ssh.', 'history | grep ssh', [], [
+      ['history', 'prints your recent commands with numbers.'],
+      ['|', 'is a pipe that sends that list to grep.'],
+      ['grep ssh', 'keeps only the lines that contain ssh.']]),
+  ];
+
+  const PSD = [
+    T(1, 'Show the path of the current directory.', 'Get-Location', [], [
+      ['Get-Location', 'returns the current location; pwd and gl are built-in aliases for it.']]),
+    T(1, 'List the files and folders in the current directory.', 'Get-ChildItem', [], [
+      ['Get-ChildItem', 'lists the items in a location; ls, dir, and gci are aliases for it on Windows.']]),
+    T(1, 'List the files and folders in the current directory, including hidden and system items.', 'Get-ChildItem -Force', [], [
+      ['Get-ChildItem', 'lists the items in a location.'],
+      ['-Force', 'includes hidden and system items that are normally left out.']]),
+    T(1, 'Change to the folder C:\\Projects.', 'Set-Location C:\\Projects', [J('Set-Location', ['', '-Path'], ['C:\\Projects', 'C:\\Projects\\'])], [
+      ['Set-Location', 'changes the current location; cd is an alias for it.'],
+      ['C:\\Projects', 'is the folder to move to.']]),
+    T(1, 'Move up one level to the parent folder.', 'Set-Location ..', ['cd..', 'Set-Location ..\\'], [
+      ['Set-Location', 'changes the current location.'],
+      ['..', 'refers to the parent folder.']]),
+    T(1, 'Create a new folder named Reports in the current directory.', 'New-Item -Name Reports -ItemType Directory',
+      [P(['Reports', '-Path Reports', '-Name Reports'], ['-ItemType Directory', '-Type Directory']).map(s => 'New-Item ' + s), 'mkdir Reports', 'md Reports'], [
+      ['New-Item', 'creates a new item such as a file or folder.'],
+      ['-Name Reports', 'is the name of the new item, created in the current location.'],
+      ['-ItemType Directory', 'makes it a folder instead of a file.']]),
+    T(1, 'Create an empty file named notes.txt.', 'New-Item -Path notes.txt -ItemType File',
+      [J('New-Item', ['notes.txt', '-Path notes.txt', '-Name notes.txt']), P(['notes.txt', '-Path notes.txt', '-Name notes.txt'], ['-ItemType File', '-Type File']).map(s => 'New-Item ' + s)], [
+      ['New-Item', 'creates a new item.'],
+      ['-Path notes.txt', 'is where to create it.'],
+      ['-ItemType File', 'makes it a file, which is also the default in the file system.']]),
+    T(1, 'Show the contents of notes.txt.', 'Get-Content notes.txt', ['Get-Content -Path notes.txt'], [
+      ['Get-Content', 'reads a file and outputs it line by line; cat and type are aliases for it.'],
+      ['notes.txt', 'is the file to read.']]),
+    T(1, 'Show the first 10 lines of access.log.', 'Get-Content access.log -TotalCount 10',
+      [P(['access.log', '-Path access.log'], ['-TotalCount 10', '-First 10', '-Head 10']).map(s => 'Get-Content ' + s),
+       J('Get-Content', ['access.log', '-Path access.log'], '| Select-Object -First 10')], [
+      ['Get-Content', 'reads a file line by line.'],
+      ['access.log', 'is the file to read.'],
+      ['-TotalCount 10', 'stops after the first 10 lines, and -First and -Head are aliases for it.']]),
+    T(1, 'Show the last 20 lines of server.log.', 'Get-Content server.log -Tail 20',
+      [P(['server.log', '-Path server.log'], ['-Tail 20', '-Last 20']).map(s => 'Get-Content ' + s),
+       J('Get-Content', ['server.log', '-Path server.log'], '| Select-Object -Last 20')], [
+      ['Get-Content', 'reads a file line by line.'],
+      ['server.log', 'is the file to read.'],
+      ['-Tail 20', 'returns only the last 20 lines, and -Last is an alias for it.']]),
+    T(2, 'Watch server.log and print new lines as they are added to it.', 'Get-Content server.log -Wait',
+      [P(['server.log', '-Path server.log'], '-Wait').map(s => 'Get-Content ' + s),
+       /^(get-content|gc|cat|type) (-path )?server\.log (-wait (-tail|-last) \d+|(-tail|-last) \d+ -wait)$/i], [
+      ['Get-Content', 'reads a file line by line.'],
+      ['server.log', 'is the file to watch.'],
+      ['-Wait', 'keeps the file open and outputs new lines as they appear, until you press Ctrl+C.']]),
+    T(1, 'Copy config.json to a new file named config.json.bak.', 'Copy-Item config.json config.json.bak',
+      [J('Copy-Item', ['config.json', '-Path config.json'], ['config.json.bak', '-Destination config.json.bak']),
+       J('Copy-Item', '-Destination config.json.bak -Path config.json')], [
+      ['Copy-Item', 'copies an item; cp and copy are aliases for it.'],
+      ['config.json', 'is the source, which binds to -Path.'],
+      ['config.json.bak', 'is the destination, which binds to -Destination.']]),
+    T(1, 'Copy the folder Photos and everything inside it to a new folder named Photos-Backup.', 'Copy-Item Photos Photos-Backup -Recurse',
+      [P('-Recurse', '-Path Photos', '-Destination Photos-Backup').map(s => 'Copy-Item ' + s),
+       J('Copy-Item', ['-Recurse Photos Photos-Backup', 'Photos -Recurse Photos-Backup', 'Photos Photos-Backup -Recurse'])], [
+      ['Copy-Item', 'copies items.'],
+      ['Photos', 'is the source folder.'],
+      ['Photos-Backup', 'is the destination folder.'],
+      ['-Recurse', 'copies the contents of the folder as well, not just the empty folder.']]),
+    T(1, 'Rename the file draft.docx to final.docx.', 'Rename-Item draft.docx final.docx',
+      [J('Rename-Item', ['draft.docx', '-Path draft.docx'], ['final.docx', '-NewName final.docx']), 'Rename-Item -NewName final.docx -Path draft.docx',
+       J('Move-Item', ['draft.docx', '-Path draft.docx'], ['final.docx', '-Destination final.docx'])], [
+      ['Rename-Item', 'changes the name of an item; ren is an alias for it.'],
+      ['draft.docx', 'is the current name.'],
+      ['final.docx', 'is the new name, which binds to -NewName.']]),
+    T(1, 'Move report.pdf into the existing folder Archive.', 'Move-Item report.pdf Archive',
+      [J('Move-Item', ['report.pdf', '-Path report.pdf'], ['Archive', 'Archive\\', '-Destination Archive', '-Destination Archive\\'])], [
+      ['Move-Item', 'moves an item; mv and move are aliases for it.'],
+      ['report.pdf', 'is the file to move.'],
+      ['Archive', 'is the destination folder.']]),
+    T(1, 'Delete the file old.log.', 'Remove-Item old.log', ['Remove-Item -Path old.log'], [
+      ['Remove-Item', 'deletes items; rm and del are aliases for it.'],
+      ['old.log', 'is the file to delete.']]),
+    T(1, 'Delete the folder build and everything inside it.', 'Remove-Item build -Recurse',
+      [P(['build', '-Path build'], '-Recurse').map(s => 'Remove-Item ' + s), P(['build', '-Path build'], '-Recurse', '-Force').map(s => 'Remove-Item ' + s)], [
+      ['Remove-Item', 'deletes items.'],
+      ['build', 'is the folder to delete.'],
+      ['-Recurse', 'deletes the contents too, without asking for confirmation for each child item.']]),
+    T(1, 'Find all .log files in C:\\Logs and all of its subfolders.', 'Get-ChildItem C:\\Logs -Recurse -Filter *.log',
+      [P(['C:\\Logs', '-Path C:\\Logs'], '-Recurse', ['-Filter *.log', '-Include *.log']).map(s => 'Get-ChildItem ' + s),
+       P(['C:\\Logs', '-Path C:\\Logs'], '-Recurse', ['-Filter *.log', '-Include *.log'], '-File').map(s => 'Get-ChildItem ' + s)], [
+      ['Get-ChildItem', 'lists items.'],
+      ['C:\\Logs', 'is the folder to start in.'],
+      ['-Recurse', 'includes all subfolders.'],
+      ['-Filter *.log', 'keeps only names ending in .log, and the file system applies it efficiently.']]),
+    T(1, 'Show the lines in app.log that contain the word error.', 'Select-String -Path app.log -Pattern error',
+      [P('-Path app.log', '-Pattern error').map(s => 'Select-String ' + s), 'Select-String error app.log', 'Select-String error -Path app.log', 'Select-String -Pattern error app.log',
+       J('Get-Content', ['app.log', '-Path app.log'], '| Select-String', ['error', '-Pattern error'])], [
+      ['Select-String', 'searches text for a pattern, much like grep, and it ignores case by default.'],
+      ['-Path app.log', 'is the file to search.'],
+      ['-Pattern error', 'is the regular expression to look for.']]),
+    T(1, 'Search every .ps1 file in the current folder for TODO.', 'Select-String -Path *.ps1 -Pattern TODO',
+      [P('-Path *.ps1', '-Pattern TODO').map(s => 'Select-String ' + s), 'Select-String TODO *.ps1', 'Select-String TODO -Path *.ps1', 'Select-String -Pattern TODO *.ps1'], [
+      ['Select-String', 'searches text for a pattern.'],
+      ['-Path *.ps1', 'uses a wildcard, which Select-String expands itself, to search every .ps1 file.'],
+      ['-Pattern TODO', 'is the text to look for.']]),
+    T(2, 'Search app.log for TODO, matching uppercase and lowercase exactly.', 'Select-String -Path app.log -Pattern TODO -CaseSensitive',
+      [P('-Path app.log', '-Pattern TODO', '-CaseSensitive').map(s => 'Select-String ' + s), J('Select-String TODO app.log -CaseSensitive'), 'Select-String -CaseSensitive TODO app.log'], [
+      ['Select-String', 'searches text for a pattern.'],
+      ['-Path app.log', 'is the file to search.'],
+      ['-Pattern TODO', 'is the text to look for.'],
+      ['-CaseSensitive', 'turns off the default case-insensitive matching.']]),
+    T(2, 'Search every .config file in the current folder and its subfolders for password, by piping files into Select-String.', 'Get-ChildItem -Recurse -Filter *.config | Select-String password',
+      [J(P('-Recurse', ['-Filter *.config', '-Include *.config']).map(s => 'Get-ChildItem ' + s), '|', 'Select-String', ['password', '-Pattern password'])], [
+      ['Get-ChildItem -Recurse', 'lists items in this folder and all subfolders.'],
+      ['-Filter *.config', 'keeps only files ending in .config.'],
+      ['|', 'passes the file objects down the pipeline.'],
+      ['Select-String password', 'searches each file it receives for password.']]),
+    T(1, 'List all running processes.', 'Get-Process', [], [
+      ['Get-Process', 'lists running processes with their memory and CPU usage; ps and gps are aliases for it.']]),
+    T(1, 'Show the running process named notepad.', 'Get-Process notepad', ['Get-Process -Name notepad', 'Get-Process -ProcessName notepad'], [
+      ['Get-Process', 'gets running processes.'],
+      ['notepad', 'is the process name, which binds to -Name and does not include the .exe extension.']]),
+    T(1, 'Stop the process whose ID is 4321.', 'Stop-Process -Id 4321', ['Stop-Process 4321'], [
+      ['Stop-Process', 'stops running processes; kill is an alias for it on Windows.'],
+      ['-Id 4321', 'selects the process by its process ID.']]),
+    T(1, 'Stop every process named notepad.', 'Stop-Process -Name notepad',
+      ['Stop-Process -ProcessName notepad', J('Get-Process', ['notepad', '-Name notepad'], '| Stop-Process')], [
+      ['Stop-Process', 'stops running processes.'],
+      ['-Name notepad', 'selects every process with that name.']]),
+    T(2, 'Show the five processes that have used the most CPU time.', 'Get-Process | Sort-Object CPU -Descending | Select-Object -First 5',
+      [J('Get-Process |', 'Sort-Object', P(['CPU', '-Property CPU'], '-Descending'), '| Select-Object -First 5')], [
+      ['Get-Process', 'gets all running processes.'],
+      ['Sort-Object CPU', 'sorts them by their CPU property, which is total processor time in seconds.'],
+      ['-Descending', 'puts the largest values first.'],
+      ['Select-Object -First 5', 'keeps only the first five objects.']]),
+    T(1, 'Send ping requests to example.com using a PowerShell cmdlet.', 'Test-Connection example.com',
+      ['Test-Connection -ComputerName example.com', 'Test-Connection -TargetName example.com'], [
+      ['Test-Connection', 'sends ICMP echo requests, like ping, and returns the results as objects.'],
+      ['example.com', 'is the host to test.']]),
+    T(2, 'Check whether TCP port 443 on example.com accepts connections.', 'Test-NetConnection example.com -Port 443',
+      [P(['example.com', '-ComputerName example.com'], '-Port 443').map(s => 'Test-NetConnection ' + s)], [
+      ['Test-NetConnection', 'runs network diagnostics; it is a Windows cmdlet with the alias tnc.'],
+      ['example.com', 'is the host to test.'],
+      ['-Port 443', 'tries a TCP connection to that port and reports TcpTestSucceeded as True or False.']]),
+    T(2, 'Send an HTTP HEAD request to https://example.com to get its headers without the page body.', 'Invoke-WebRequest https://example.com -Method Head',
+      [P(['https://example.com', '-Uri https://example.com'], '-Method Head').map(s => 'Invoke-WebRequest ' + s), 'curl.exe -I https://example.com'], [
+      ['Invoke-WebRequest', 'sends an HTTP request; iwr is an alias for it.'],
+      ['https://example.com', 'is the URL, which binds to -Uri.'],
+      ['-Method Head', 'sends a HEAD request, which returns only the headers.']]),
+    T(1, 'Download https://example.com/file.zip and save it as file.zip.', 'Invoke-WebRequest https://example.com/file.zip -OutFile file.zip',
+      [P(['https://example.com/file.zip', '-Uri https://example.com/file.zip'], '-OutFile file.zip').map(s => 'Invoke-WebRequest ' + s)], [
+      ['Invoke-WebRequest', 'sends an HTTP request.'],
+      ['https://example.com/file.zip', 'is the URL to download.'],
+      ['-OutFile file.zip', 'saves the response body to that file.']]),
+    T(1, 'List your file system drives with their used and free space.', 'Get-PSDrive -PSProvider FileSystem', ['Get-PSDrive', 'Get-Volume'], [
+      ['Get-PSDrive', 'lists PowerShell drives, and for disk drives it shows Used and Free space.'],
+      ['-PSProvider FileSystem', 'leaves out non-disk drives such as Env: and HKLM:.']]),
+    T(2, 'Add up the sizes of all files in the Downloads folder and its subfolders.', 'Get-ChildItem Downloads -Recurse -File | Measure-Object -Property Length -Sum',
+      [J(P(['Downloads', '-Path Downloads'], '-Recurse', '-File').map(s => 'Get-ChildItem ' + s), '|', 'Measure-Object', P(['-Property Length', 'Length'], '-Sum'))], [
+      ['Get-ChildItem Downloads', 'lists the contents of the Downloads folder.'],
+      ['-Recurse -File', 'goes into every subfolder and keeps only files, since folders have no Length.'],
+      ['|', 'passes the file objects to the next command.'],
+      ['Measure-Object -Property Length -Sum', 'adds up the Length property, which is each file size in bytes.']]),
+    T(1, 'Compress the folder Site into a zip file named site.zip.', 'Compress-Archive -Path Site -DestinationPath site.zip',
+      ['Compress-Archive Site site.zip', 'Compress-Archive -DestinationPath site.zip -Path Site', 'Compress-Archive Site -DestinationPath site.zip'], [
+      ['Compress-Archive', 'creates a zip file.'],
+      ['-Path Site', 'is what to put in the archive.'],
+      ['-DestinationPath site.zip', 'is the zip file to create.']]),
+    T(1, 'Extract backup.zip into a folder named backup.', 'Expand-Archive backup.zip -DestinationPath backup',
+      [P(['backup.zip', '-Path backup.zip'], '-DestinationPath backup').map(s => 'Expand-Archive ' + s), 'Expand-Archive backup.zip backup'], [
+      ['Expand-Archive', 'extracts a zip file.'],
+      ['backup.zip', 'is the archive, which binds to -Path.'],
+      ['-DestinationPath backup', 'is the folder to extract into, created if needed.']]),
+    T(1, 'Print the value of the Path environment variable.', '$env:Path',
+      [J(['Write-Output', ''], '$env:Path'), 'Get-ChildItem Env:Path', 'Get-Item Env:Path'], [
+      ['$env:', 'is the drive-like prefix that reads environment variables.'],
+      ['Path', 'is the variable name, and in PowerShell the name is not case-sensitive.']]),
+    S(T(2, 'Set the environment variable API_URL to https://api.example.com for the current session.', '$env:API_URL = "https://api.example.com"',
+      ['$env:API_URL=~"https://api.example.com"', '$env:API_URL = ~"https://api.example.com"'], [
+      ['$env:API_URL', 'refers to the environment variable named API_URL.'],
+      ['=', 'assigns a value, and the change lasts until you close this PowerShell session.'],
+      ['"https://api.example.com"', 'is the value, which must be quoted because it is a string.']])),
+    T(1, 'List all environment variables.', 'Get-ChildItem Env:', ['Get-ChildItem Env:\\', 'Get-ChildItem -Path Env:', 'Get-ChildItem -Path Env:\\'], [
+      ['Get-ChildItem', 'lists the items in a location.'],
+      ['Env:', 'is the drive that holds environment variables.']]),
+    T(1, 'Save the list of running processes to procs.txt.', 'Get-Process | Out-File procs.txt',
+      ['Get-Process | Out-File -FilePath procs.txt', 'Get-Process > procs.txt'], [
+      ['Get-Process', 'gets running processes.'],
+      ['|', 'passes the output to the next command.'],
+      ['Out-File procs.txt', 'writes the output to procs.txt the same way it would appear on screen.']]),
+    T(1, 'Add the line Backup finished to the end of backup.log.', 'Add-Content backup.log "Backup finished"',
+      [J('Add-Content', P(['backup.log', '-Path backup.log'], '-Value "Backup finished"')), 'Add-Content -Value "Backup finished" -Path backup.log',
+       '"Backup finished" >> backup.log', 'echo "Backup finished" >> backup.log', J('"Backup finished" | Add-Content', ['backup.log', '-Path backup.log'])], [
+      ['Add-Content', 'appends text to a file without removing what is already there.'],
+      ['backup.log', 'is the file, which binds to -Path.'],
+      ['"Backup finished"', 'is the text to add, which binds to -Value.']]),
+    T(2, 'Count the lines in data.csv.', 'Get-Content data.csv | Measure-Object -Line',
+      [J('Get-Content', ['data.csv', '-Path data.csv'], '| Measure-Object -Line'), J(['(Get-Content', '(gc', '(cat', '(type'], ['data.csv).Count', 'data.csv).Length'])], [
+      ['Get-Content data.csv', 'outputs the file one line at a time.'],
+      ['|', 'passes each line down the pipeline.'],
+      ['Measure-Object -Line', 'counts the lines it receives.']]),
+    T(1, 'Find out where the git command comes from and what kind of command it is.', 'Get-Command git', ['Get-Command -Name git', '(Get-Command git).Source', 'where.exe git'], [
+      ['Get-Command', 'finds cmdlets, functions, aliases, and programs, and shows the path of a program in its Source column.'],
+      ['git', 'is the command to look up.']]),
+    T(1, 'Show the help for Get-ChildItem.', 'Get-Help Get-ChildItem', ['Get-Help -Name Get-ChildItem'], [
+      ['Get-Help', 'shows the documentation for a command; help and man are shortcuts for it.'],
+      ['Get-ChildItem', 'is the command to document.']]),
+    T(1, 'Show the commands you have run in this session.', 'Get-History', [], [
+      ['Get-History', 'lists the commands entered in the current session; history and h are aliases for it.']]),
+    T(2, 'List only the services that are currently running.', 'Get-Service | Where-Object Status -eq Running',
+      [J('Get-Service |', 'Where-Object', ['Status -eq Running', '-Property Status -eq Running', '{ $_.Status -eq ~"Running" }'])], [
+      ['Get-Service', 'gets all Windows services.'],
+      ['|', 'passes the service objects to the next command.'],
+      ['Where-Object Status -eq Running', 'keeps only objects whose Status property equals Running.']]),
+    T(2, 'List the files under C:\\Data, including subfolders, that are larger than 100 MB.', 'Get-ChildItem C:\\Data -Recurse -File | Where-Object Length -gt 100MB',
+      [J(P(['C:\\Data', '-Path C:\\Data'], '-Recurse', '-File').map(s => 'Get-ChildItem ' + s), '|', 'Where-Object', ['Length -gt 100MB', '-Property Length -gt 100MB', '{ $_.Length -gt 100MB }'])], [
+      ['Get-ChildItem C:\\Data -Recurse -File', 'lists every file under C:\\Data.'],
+      ['|', 'passes the file objects along.'],
+      ['Where-Object Length -gt 100MB', 'keeps files whose size in bytes is greater than 100MB, a PowerShell number literal meaning 104,857,600.']]),
+    T(1, 'Compute the SHA-256 hash of setup.exe.', 'Get-FileHash setup.exe',
+      [J('Get-FileHash', P(['setup.exe', '-Path setup.exe'], '-Algorithm SHA256')), 'Get-FileHash -Path setup.exe'], [
+      ['Get-FileHash', 'computes a file hash, and SHA256 is its default algorithm.'],
+      ['setup.exe', 'is the file to hash.']]),
+    T(1, 'Check whether the file config.json exists.', 'Test-Path config.json', ['Test-Path -Path config.json'], [
+      ['Test-Path', 'returns True if the path exists and False if it does not.'],
+      ['config.json', 'is the path to check.']]),
+    T(1, 'Clear the console screen.', 'Clear-Host', [], [
+      ['Clear-Host', 'clears the console; cls and clear are aliases for it.']]),
+    T(2, 'Show the IP configuration of your network adapters using a PowerShell cmdlet.', 'Get-NetIPConfiguration', ['Get-NetIPAddress', 'ipconfig', 'ipconfig /all'], [
+      ['Get-NetIPConfiguration', 'shows each adapter with its IP addresses, gateway, and DNS servers; gip is its alias.']]),
+    T(1, 'Show the current date and time.', 'Get-Date', [], [
+      ['Get-Date', 'returns the current date and time as a DateTime object.']]),
+    T(2, 'Print the lines of names.txt sorted alphabetically, with duplicates removed.', 'Get-Content names.txt | Sort-Object -Unique',
+      [J('Get-Content', ['names.txt', '-Path names.txt'], '|', ['Sort-Object -Unique', 'Sort-Object | Get-Unique'])], [
+      ['Get-Content names.txt', 'outputs the file line by line.'],
+      ['|', 'passes the lines along.'],
+      ['Sort-Object -Unique', 'sorts them and drops duplicates, comparing without regard to case.']]),
+    T(2, 'Run the script build.ps1 from the current folder and send its errors to errors.txt.', '.\\build.ps1 2> errors.txt', ['./build.ps1 2> errors.txt'], [
+      ['.\\build.ps1', 'runs the script, and the .\\ prefix is required because PowerShell does not run scripts from the current folder by bare name.'],
+      ['2>', 'redirects the error stream.'],
+      ['errors.txt', 'is the file that receives the errors.']]),
+    T(2, 'Show the properties and methods of the objects that Get-Process returns.', 'Get-Process | Get-Member', [], [
+      ['Get-Process', 'outputs process objects.'],
+      ['|', 'passes them along.'],
+      ['Get-Member', 'lists the type, properties, and methods of the objects it receives.']]),
+    T(1, 'Find out which cmdlet the alias gci stands for.', 'Get-Alias gci', ['Get-Alias -Name gci'], [
+      ['Get-Alias', 'shows aliases and the commands they point to.'],
+      ['gci', 'is the alias to look up, which turns out to be Get-ChildItem.']]),
+  ];
+
+  const MSG = (m, cmd, flags) => J(cmd, flags.map(f => `${f} "${m}"`)).concat(J(cmd, [`--message="${m}"`, `-m"${m}"`]));
+  const GIT = [
+    T(1, 'Turn the current directory into a new Git repository.', 'git init', [], [
+      ['git init', 'creates a hidden .git directory that stores the history of the new repository.']]),
+    T(1, 'Download a full copy of the repository at https://github.com/acme/webapp.git.', 'git clone https://github.com/acme/webapp.git', [], [
+      ['git clone', 'copies a repository, including all of its history, into a new directory.'],
+      ['https://github.com/acme/webapp.git', 'is the URL of the repository, and the new directory will be named webapp.']]),
+    T(1, 'Clone https://github.com/acme/webapp.git into a directory named app instead of webapp.', 'git clone https://github.com/acme/webapp.git app',
+      ['git clone https://github.com/acme/webapp.git app/'], [
+      ['git clone', 'copies a repository.'],
+      ['https://github.com/acme/webapp.git', 'is the repository URL.'],
+      ['app', 'is the name of the directory to create.']]),
+    T(1, 'Show which files are modified, staged, or untracked.', 'git status', ['git status -s', 'git status --short'], [
+      ['git status', 'summarizes the state of the working tree and the staging area.']]),
+    T(1, 'Stage the file index.html for the next commit.', 'git add index.html', [], [
+      ['git add', 'copies the current content of a file into the staging area.'],
+      ['index.html', 'is the file to stage.']]),
+    T(1, 'From the root of the repository, stage every change, including new and deleted files.', 'git add -A', ['git add --all', 'git add .'], [
+      ['git add', 'stages changes.'],
+      ['-A', 'stages all changes in the whole repository, including new files and deletions.']]),
+    T(1, 'Commit the staged changes with the message Fix login redirect.', 'git commit -m "Fix login redirect"',
+      [MSG('Fix login redirect', 'git commit', ['--message'])], [
+      ['git commit', 'records the staged changes as a new commit.'],
+      ['-m "Fix login redirect"', 'supplies the commit message, quoted because it contains spaces.']]),
+    T(2, 'Stage all modified tracked files and commit them in one step with the message Update README.', 'git commit -am "Update README"',
+      [J('git commit', ['-a -m', '--all -m', '-a --message', '--all --message'], '"Update README"'), 'git commit -m "Update README" -a', 'git commit -m "Update README" --all'], [
+      ['git commit', 'records a new commit.'],
+      ['-a', 'automatically stages files that are already tracked and modified, but not new files.'],
+      ['-m "Update README"', 'supplies the message.']]),
+    T(2, 'Replace the message of the most recent commit with Add search page.', 'git commit --amend -m "Add search page"',
+      ['git commit -m "Add search page" --amend', 'git commit --amend --message "Add search page"', 'git commit --amend --message="Add search page"'], [
+      ['git commit', 'records a commit.'],
+      ['--amend', 'replaces the latest commit instead of adding a new one.'],
+      ['-m "Add search page"', 'is the new message.']]),
+    T(1, 'Show the commit history with one short line per commit.', 'git log --oneline', ['git log --pretty=oneline'], [
+      ['git log', 'shows the commit history, newest first.'],
+      ['--oneline', 'prints each commit as a short hash and its subject line.']]),
+    T(2, 'Show a compact text graph of the history of all branches.', 'git log --oneline --graph --all', [J('git log', P('--oneline', '--graph', '--all'))], [
+      ['git log', 'shows the commit history.'],
+      ['--oneline', 'puts each commit on one line.'],
+      ['--graph', 'draws the branch and merge structure with ASCII lines.'],
+      ['--all', 'includes every branch, not just the current one.']]),
+    T(1, 'Show only the three most recent commits.', 'git log -3', ['git log -n 3', 'git log -n3', 'git log --max-count=3', 'git log --max-count 3'], [
+      ['git log', 'shows the commit history.'],
+      ['-3', 'limits the output to three commits.']]),
+    T(1, 'Show the changes in your working tree that are not staged yet.', 'git diff', [], [
+      ['git diff', 'with no arguments compares the working tree with the staging area.']]),
+    T(1, 'Show the changes that are staged and will go into the next commit.', 'git diff --staged', ['git diff --cached'], [
+      ['git diff', 'shows differences.'],
+      ['--staged', 'compares the staging area with the last commit, and --cached means the same thing.']]),
+    T(1, 'List your local branches.', 'git branch', ['git branch --list', 'git branch -l'], [
+      ['git branch', 'with no arguments lists local branches and marks the current one with an asterisk.']]),
+    T(1, 'List all branches, including remote-tracking branches.', 'git branch -a', ['git branch --all'], [
+      ['git branch', 'lists branches.'],
+      ['-a', 'includes remote-tracking branches such as origin/main.']]),
+    T(1, 'Create a new branch named feature/login without switching to it.', 'git branch feature/login', [], [
+      ['git branch', 'creates a branch when given a name.'],
+      ['feature/login', 'is the new branch, which starts at the current commit.']]),
+    T(1, 'Create a new branch named feature/search and switch to it in one command.', 'git switch -c feature/search',
+      ['git switch --create feature/search', 'git checkout -b feature/search'], [
+      ['git switch', 'changes the current branch.'],
+      ['-c', 'creates the branch first, just like the older git checkout -b.'],
+      ['feature/search', 'is the name of the new branch.']]),
+    T(1, 'Switch to the existing branch main.', 'git switch main', ['git checkout main'], [
+      ['git switch', 'changes the current branch and updates the working tree to match it.'],
+      ['main', 'is the branch to switch to.']]),
+    T(1, 'Merge the branch feature/login into the branch you are on.', 'git merge feature/login', [], [
+      ['git merge', 'joins the history of another branch into the current branch.'],
+      ['feature/login', 'is the branch whose commits are brought in.']]),
+    T(1, 'Delete the local branch feature/login, which has already been merged.', 'git branch -d feature/login', ['git branch --delete feature/login'], [
+      ['git branch', 'manages branches.'],
+      ['-d', 'deletes a branch, but refuses if its commits have not been merged.'],
+      ['feature/login', 'is the branch to delete.']]),
+    T(2, 'Delete the local branch experiment even though it has not been merged.', 'git branch -D experiment',
+      ['git branch --delete --force experiment', 'git branch -d -f experiment', 'git branch -d --force experiment'], [
+      ['git branch', 'manages branches.'],
+      ['-D', 'is short for --delete --force and deletes the branch even with unmerged commits.'],
+      ['experiment', 'is the branch to delete.']]),
+    T(2, 'Rename the current branch to main.', 'git branch -m main', ['git branch --move main', 'git branch -M main'], [
+      ['git branch', 'manages branches.'],
+      ['-m', 'moves, or renames, a branch, and with one name it renames the current branch.'],
+      ['main', 'is the new name.']]),
+    T(1, 'Set your uncommitted changes aside so that you have a clean working tree.', 'git stash', ['git stash push'], [
+      ['git stash', 'saves your uncommitted changes to tracked files on a stack and reverts them in the working tree.']]),
+    T(1, 'Reapply your most recent stash and remove it from the stash list.', 'git stash pop', [], [
+      ['git stash', 'manages stashed changes.'],
+      ['pop', 'applies the newest stash and drops it if it applied cleanly.']]),
+    T(1, 'List the stashes you have saved.', 'git stash list', [], [
+      ['git stash', 'manages stashed changes.'],
+      ['list', 'shows each stash as stash@{0}, stash@{1}, and so on, newest first.']]),
+    T(2, 'Undo the last commit but keep its changes staged.', 'git reset --soft HEAD~1', ['git reset --soft HEAD~', 'git reset --soft HEAD^'], [
+      ['git reset', 'moves the current branch to another commit.'],
+      ['--soft', 'leaves the staging area and the working tree untouched.'],
+      ['HEAD~1', 'is the parent of the current commit.']]),
+    T(1, 'Unstage config.yaml but keep your changes to it in the working tree.', 'git restore --staged config.yaml',
+      ['git restore --staged -- config.yaml', 'git reset config.yaml', 'git reset HEAD config.yaml', 'git reset -- config.yaml', 'git reset HEAD -- config.yaml'], [
+      ['git restore', 'restores files from another version.'],
+      ['--staged', 'restores the staging area from the last commit, which unstages the file without touching your edits.'],
+      ['config.yaml', 'is the file to unstage.']]),
+    T(1, 'Throw away the unstaged changes in style.css and go back to the staged or committed version.', 'git restore style.css',
+      ['git restore -- style.css', 'git checkout -- style.css', 'git checkout style.css'], [
+      ['git restore', 'restores files.'],
+      ['style.css', 'is the file whose working-tree changes are discarded, and this cannot be undone.']]),
+    T(2, 'Create a new commit that undoes the changes made by commit a1b2c3d.', 'git revert a1b2c3d', [], [
+      ['git revert', 'adds a new commit that applies the opposite of an earlier commit, so history is not rewritten.'],
+      ['a1b2c3d', 'is the commit to undo.']]),
+    T(1, 'List the remotes of this repository along with their URLs.', 'git remote -v', ['git remote --verbose'], [
+      ['git remote', 'manages the remote repositories that you track.'],
+      ['-v', 'shows the fetch and push URL of each remote.']]),
+    T(1, 'Add a remote named origin that points to https://github.com/acme/webapp.git.', 'git remote add origin https://github.com/acme/webapp.git', [], [
+      ['git remote add', 'registers a new remote.'],
+      ['origin', 'is the name of the remote, which is the usual name for the main one.'],
+      ['https://github.com/acme/webapp.git', 'is its URL.']]),
+    T(1, 'Push the branch main to origin and set origin/main as its upstream.', 'git push -u origin main', ['git push --set-upstream origin main'], [
+      ['git push', 'uploads commits to a remote.'],
+      ['-u', 'records origin/main as the upstream, so later a plain git push or git pull knows where to go.'],
+      ['origin', 'is the remote.'],
+      ['main', 'is the branch to push.']]),
+    T(1, 'Upload your new commits on the current branch, which already has an upstream.', 'git push', [], [
+      ['git push', 'with no arguments pushes the current branch to its upstream.']]),
+    T(1, 'Fetch the new commits from the upstream branch and integrate them into your current branch.', 'git pull', [], [
+      ['git pull', 'runs git fetch and then merges or rebases the upstream changes into the current branch.']]),
+    T(1, 'Download new commits and branches from origin without changing your own branches or files.', 'git fetch', ['git fetch origin'], [
+      ['git fetch', 'updates remote-tracking branches like origin/main but leaves your local branches and working tree alone.']]),
+    T(2, 'Apply the changes from commit 9f8e7d6, which is on another branch, as a new commit on your current branch.', 'git cherry-pick 9f8e7d6', [], [
+      ['git cherry-pick', 'copies the changes of an existing commit onto the current branch as a new commit.'],
+      ['9f8e7d6', 'is the commit to copy.']]),
+    T(1, 'Create a lightweight tag named v1.0 on the current commit.', 'git tag v1.0', [], [
+      ['git tag', 'creates a tag when given a name.'],
+      ['v1.0', 'is the tag name, and without -a or -m it is a lightweight tag that only points to the commit.']]),
+    T(2, 'Create an annotated tag named v1.2.0 with the message Release 1.2.0.', 'git tag -a v1.2.0 -m "Release 1.2.0"',
+      ['git tag -a -m "Release 1.2.0" v1.2.0', 'git tag -m "Release 1.2.0" -a v1.2.0', 'git tag -am "Release 1.2.0" v1.2.0', 'git tag -m "Release 1.2.0" v1.2.0'], [
+      ['git tag', 'creates tags.'],
+      ['-a', 'makes an annotated tag, which stores the tagger, date, and a message.'],
+      ['v1.2.0', 'is the tag name.'],
+      ['-m "Release 1.2.0"', 'is the tag message.']]),
+    T(2, 'Push the tag v1.0 to origin.', 'git push origin v1.0', ['git push origin tag v1.0', 'git push origin refs/tags/v1.0'], [
+      ['git push', 'uploads to a remote, and tags are not pushed unless you ask for them.'],
+      ['origin', 'is the remote.'],
+      ['v1.0', 'is the tag to push.']]),
+    T(2, 'Show who last changed each line of app.js, and in which commit.', 'git blame app.js', [], [
+      ['git blame', 'annotates every line of a file with the commit, author, and date that last changed it.'],
+      ['app.js', 'is the file to annotate.']]),
+    T(1, 'Show the message and the changes of commit a1b2c3d.', 'git show a1b2c3d', [], [
+      ['git show', 'displays a commit with its metadata and its diff.'],
+      ['a1b2c3d', 'is the commit to show.']]),
+    T(1, 'Set your name for commits in all of your repositories to Ada Lovelace.', 'git config --global user.name "Ada Lovelace"', [], [
+      ['git config', 'reads and writes Git settings.'],
+      ['--global', 'writes to your user-level config file, so it applies to every repository.'],
+      ['user.name', 'is the setting that is recorded as the author name.'],
+      ['"Ada Lovelace"', 'is the value, quoted because it contains a space.']]),
+    T(2, 'Stop tracking secrets.env in Git but keep the file on disk.', 'git rm --cached secrets.env', [], [
+      ['git rm', 'removes files from Git.'],
+      ['--cached', 'removes the file only from the index, so it stays in your working tree.'],
+      ['secrets.env', 'is the file to stop tracking.']]),
+    T(1, 'Rename the tracked file old.js to new.js and stage the rename.', 'git mv old.js new.js', [], [
+      ['git mv', 'renames a file and stages the change in one step.'],
+      ['old.js', 'is the current name.'],
+      ['new.js', 'is the new name.']]),
+    T(2, 'Move your current branch to origin/main and discard your local commits and any uncommitted changes to tracked files.', 'git reset --hard origin/main', [], [
+      ['git reset', 'moves the current branch to another commit.'],
+      ['--hard', 'also resets the staging area and working tree, which throws away uncommitted changes.'],
+      ['origin/main', 'is the commit to move to, as of your last fetch.']]),
+    T(2, 'Preview which untracked files git clean would delete, without deleting anything.', 'git clean -n', ['git clean --dry-run'], [
+      ['git clean', 'deletes untracked files from the working tree.'],
+      ['-n', 'is a dry run that only lists what would be removed.']]),
+    T(2, 'Replay the commits of your current branch on top of the branch main.', 'git rebase main', [], [
+      ['git rebase', 'reapplies your commits one by one on top of another base.'],
+      ['main', 'is the new base for your branch.']]),
+  ];
+
+  const DECKS = [
+    { id: 'linux', name: 'Linux shell', desc: 'bash and GNU coreutils', prompt: '$', tasks: LINUX },
+    { id: 'ps', name: 'PowerShell', desc: 'Windows PowerShell and PowerShell 7 on Windows', prompt: 'PS>', tasks: PSD },
+    { id: 'git', name: 'Git', desc: 'everyday Git commands', prompt: '$', tasks: GIT },
+    { id: 'mixed', name: 'Mixed', desc: 'all three decks together', prompt: '$', tasks: null },
+  ];
+  DECKS.slice(0, 3).forEach(d => d.tasks.forEach(t => { t.deck = d.id; }));
+  DECKS[3].tasks = [...LINUX, ...PSD, ...GIT];
+  const DECK_BY_ID = Object.fromEntries(DECKS.map(d => [d.id, d]));
+
+  // Expose the data and checker for test harnesses (Node or the console). Harmless in normal play.
+  window.CommandRecall = { DECKS, check, tokenize, compile };
+
+  // ---------- Game ----------
+  const params = new URLSearchParams(location.search);
+  const rand = params.has('seed') ? Arcade.seeded(params.get('seed')) : Math.random;
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', deck: 0, score: 0, lives: LIVES, n: 0, queue: [], cur: null, t0: 0 };
+  $('best').textContent = best.toLocaleString('en-US');
+
+  const deckBox = $('decks');
+  DECKS.forEach((d, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'choice deck';
+    b.innerHTML = `<kbd>${i + 1}</kbd><span><span class="dn"></span><small></small></span>`;
+    b.querySelector('.dn').textContent = d.name;
+    b.querySelector('small').textContent = d.desc;
+    b.setAttribute('aria-label', `${d.name} deck: ${d.desc}`);
+    b.addEventListener('click', () => { pickDeck(i); $('go').focus(); });
+    deckBox.append(b);
+  });
+  function pickDeck(i) {
+    s.deck = i;
+    [...deckBox.children].forEach((b, j) => { b.classList.toggle('sel', i === j); b.setAttribute('aria-pressed', String(i === j)); });
+    $('deckTag').textContent = DECKS[i].name;
+  }
+  pickDeck(0);
+
+  const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+  function hud() {
+    $('score').textContent = s.score.toLocaleString('en-US');
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', plural(s.lives, 'life', 'lives'));
+  }
+  function showOverlay(t, p, b) {
+    $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b;
+    $('ov').hidden = false; $('go').focus();
+  }
+  function buildQueue() {
+    const tasks = DECKS[s.deck].tasks;
+    return [...Arcade.shuffle(tasks.filter(t => t.lv === 1), rand), ...Arcade.shuffle(tasks.filter(t => t.lv === 2), rand)];
+  }
+
+  function start() {
+    // The Enter that ends a game must not also start the next one.
+    if (s.state === 'over' && performance.now() - s.overAt < 500) return;
+    Object.assign(s, { score: 0, lives: LIVES, n: 0, queue: buildQueue() });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function next() {
+    if (!s.queue.length) s.queue = buildQueue();
+    s.cur = s.queue.shift();
+    s.n++;
+    const d = DECK_BY_ID[s.cur.deck];
+    $('deckTag').textContent = d.name;
+    $('prompt').textContent = d.prompt;
+    $('num').textContent = `Task ${s.n.toLocaleString('en-US')}`;
+    $('q').textContent = s.cur.t;
+    $('fb').textContent = ''; $('fb').className = '';
+    $('ex').hidden = true;
+    const inp = $('cmd');
+    inp.value = ''; inp.readOnly = false;
+    inp.setAttribute('aria-label', `Type the ${d.name} command`);
+    s.state = 'ask';
+    s.t0 = performance.now();
+    inp.focus();
+  }
+
+  function submit() {
+    const inp = $('cmd');
+    const val = inp.value;
+    if (!val.trim()) return; // ignore empty submissions
+    s.state = 'reveal';
+    inp.readOnly = true;
+    const right = check(s.cur, val);
+    const fb = $('fb');
+    if (right) {
+      const secs = (performance.now() - s.t0) / 1000;
+      const bonus = Math.max(0, Math.min(100, Math.round(100 - 3 * (secs - 3))));
+      const pts = 100 + bonus;
+      s.score += pts;
+      fb.textContent = `Correct! +${plural(pts, 'point', 'points')}.`; fb.className = 'right';
+    } else {
+      s.lives--;
+      fb.textContent = `Not quite. The answer was ${s.cur.c}`; fb.className = 'wrong';
+    }
+    $('canon').textContent = s.cur.c;
+    const ul = $('parts'); ul.innerHTML = '';
+    for (const [code, text] of s.cur.x) {
+      const li = document.createElement('li');
+      const c = document.createElement('code'); c.textContent = code;
+      li.append(c, ' ' + text);
+      ul.append(li);
+    }
+    const last = s.lives <= 0;
+    $('nextHint').textContent = last ? 'That was your last life. Press Enter to see your score.' : 'Press Enter to continue.';
+    $('next').textContent = last ? 'See your score' : 'Continue';
+    $('ex').hidden = false;
+    hud();
+    $('next').focus();
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives > 0) return next();
+    s.state = 'over';
+    s.overAt = performance.now();
+    $('cmd').value = '';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = best.toLocaleString('en-US');
+    const solved = s.n - LIVES;
+    showOverlay('Game over',
+      `You scored ${plural(s.score, 'point', 'points')} with ${plural(solved, 'correct command', 'correct commands')}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${best.toLocaleString('en-US')}.` : '')} Pick a deck and press Enter to play again.`,
+      'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.key === 'Escape') return;
+    if (s.state === 'ready' || s.state === 'over') {
+      if (/^[1-4]$/.test(e.key)) { e.preventDefault(); pickDeck(Number(e.key) - 1); $('go').focus(); }
+      else if (e.key === 'Enter') { e.preventDefault(); start(); }
+      return;
+    }
+    if (s.state === 'ask') {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      else if (document.activeElement !== $('cmd') && e.key.length === 1) $('cmd').focus();
+      return;
+    }
+    if (s.state === 'reveal' && e.key === 'Enter') { e.preventDefault(); advance(); }
+  });
+  $('go').addEventListener('click', start);
+  $('next').addEventListener('click', advance);
+  $('go').focus();
+})();
+</script>

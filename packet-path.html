@@ -1,0 +1,749 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Packet Path</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: wide cabinet, HUD, then a panel with scenario header, network diagram, question, choices and feedback. */
+  :root { --accent: #89ddff; }
+  .cab { max-width: 760px; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 520px; }
+  .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #scen { color: var(--accent); }
+  #intro { margin: 0; font-size: 0.88rem; line-height: 1.5; color: var(--muted); }
+  #net { width: 100%; height: auto; display: block; background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); }
+  #net line { stroke: var(--grid); stroke-width: 3; }
+  #net line.hot { stroke: color-mix(in srgb, var(--accent) 60%, var(--grid)); }
+  #net .node rect { fill: var(--board); stroke: var(--grid); stroke-width: 2; rx: 6; }
+  #net .node text { fill: var(--ink); font: 600 13px var(--mono); text-anchor: middle; }
+  #net .node text.sub { fill: var(--muted); font-weight: 400; font-size: 11px; }
+  #net .node.cur rect { stroke: var(--food); stroke-width: 3; }
+  #net .node.hot rect { stroke: var(--accent); stroke-width: 3; fill: color-mix(in srgb, var(--accent) 14%, var(--board)); }
+  #net .pkt { fill: var(--accent); stroke: var(--ground); stroke-width: 2; }
+  #q { margin: 0; font-size: 1.02rem; line-height: 1.5; font-weight: 600; outline: none; }
+  .choices { grid-template-columns: 1fr; }
+  .choice { min-height: 44px; padding: 10px 14px; }
+  .choice:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .choice:disabled { cursor: default; opacity: 1; }
+  #fb { display: flex; flex-direction: column; gap: 8px; font-size: 0.88rem; line-height: 1.55; }
+  #fb p { margin: 0; }
+  #fb .head.right { color: var(--good); font-weight: 600; }
+  #fb .head.wrong { color: var(--danger); font-weight: 600; }
+  #fb .head.done { color: var(--accent); font-weight: 600; }
+  #fb .recap { background: var(--ground); border-left: 3px solid var(--accent); padding: 10px 12px; border-radius: 3px; }
+  #next { align-self: flex-start; }
+  #next:focus-visible, #go:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+</style>
+
+<div class="cab">
+  <h1>Packet Path</h1>
+  <p class="rule">Follow real network traffic step by step and choose what happens next at each hop. Each correct step earns points, finishing a scenario earns a bonus, and three wrong answers end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="scen">Scenario</span><span id="stepn"></span></div>
+    <p id="intro"></p>
+    <svg id="net" viewBox="0 0 720 240" role="img" aria-label="Network diagram"></svg>
+    <p id="q" tabindex="-1">The first step will appear here.</p>
+    <div class="choices" id="choices"></div>
+    <div id="fb" aria-live="polite"></div>
+    <button id="next" type="button" hidden>Continue</button>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Each scenario follows one piece of network traffic. Read the situation, then press 1–4 or click to choose what happens next.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Choose a step with <kbd>1</kbd>–<kbd>4</kbd>, and press <kbd>Enter</kbd> to start a game or continue after an explanation. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const KEY = 'packetPathBest', LIVES = 3, STEP_PTS = 100, BONUS = 250;
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Each scenario: nodes [id, label, sub, x, y], links 'a-b', steps { q, a: [correct, wrong...], why, path or paths }.
+  // `path` is the route the packet takes for the correct answer; its first node is where the packet is when the question is asked.
+  const SCENARIOS = [
+    {
+      title: 'Loading a secure website',
+      intro: 'You type https://shop.example.com into the browser on your home laptop and press Enter. This is the first visit, so nothing about the site is cached anywhere yet.',
+      nodes: [
+        ['laptop', 'Laptop', '192.168.1.20', 70, 200], ['router', 'Home router', '192.168.1.1', 210, 200],
+        ['resolver', 'ISP resolver', '198.51.100.53', 330, 120], ['net', 'Internet', '', 450, 200],
+        ['web', 'Web server', '203.0.113.80', 630, 200], ['root', 'Root server', '', 330, 38],
+        ['tld', '.com server', '', 480, 38], ['auth', 'example.com DNS', '', 630, 38],
+      ],
+      links: ['laptop-router', 'router-resolver', 'router-net', 'net-web', 'resolver-root', 'resolver-tld', 'resolver-auth'],
+      steps: [
+        { q: 'Before any packet leaves the laptop, what happens first?',
+          a: ['The browser and operating system check their local DNS caches (and the hosts file) for an address for shop.example.com.',
+              'The browser opens a TCP connection to shop.example.com on port 443.',
+              'The laptop sends an ARP request asking which device is shop.example.com.',
+              'The laptop asks the home router for a DHCP lease for shop.example.com.'],
+          why: 'Packets are addressed to IP addresses, not names, so the name must be resolved first, and the cheapest place to look is a local cache. On this first visit, the caches have no entry.',
+          path: ['laptop'] },
+        { q: 'Nothing is cached. Where does the laptop’s stub resolver send its DNS query?',
+          a: ['To the recursive resolver it was configured with, here the ISP’s resolver at 198.51.100.53, usually over UDP port 53.',
+              'Directly to the web server, which answers with its own address.',
+              'To a root name server, which the laptop then follows down the hierarchy itself.',
+              'As a broadcast to every device on the home network.'],
+          why: 'A stub resolver doesn’t walk the DNS hierarchy itself; it hands the whole question to a recursive resolver it learned about from DHCP. (Simplified: many home routers act as a DNS forwarder in between.)',
+          path: ['laptop', 'router', 'resolver'] },
+        { q: 'The resolver has nothing cached for this name either. Whom does it ask first?',
+          a: ['A root name server, which replies with a referral to the name servers for .com.',
+              'The web server for shop.example.com.',
+              'The laptop’s home router.',
+              'The DHCP server of the ISP.'],
+          why: 'With a cold cache, resolution starts at the root, and the root only knows which servers are responsible for each top-level domain. (Simplified: busy resolvers almost always have the root and .com referrals cached already.)',
+          path: ['resolver', 'root', 'resolver'] },
+        { q: 'The root server sent back a referral. What does the resolver do next?',
+          a: ['It asks a .com name server, which refers it to the authoritative name servers for example.com.',
+              'It passes the referral back to the laptop, which continues the lookup on its own.',
+              'It asks the same root server again, this time over TCP.',
+              'It gives up and returns an NXDOMAIN (no such domain) error.'],
+          why: 'A recursive resolver follows each referral itself, moving one level down the hierarchy each time, until it reaches a server that can answer authoritatively.',
+          path: ['resolver', 'tld', 'resolver'] },
+        { q: 'The resolver asks example.com’s authoritative server for the A record of shop.example.com. What happens?',
+          a: ['The server answers with the address 203.0.113.80 and a TTL, and the resolver caches it and returns it to the laptop.',
+              'The server refers the resolver back to the root servers.',
+              'The server sends the web page directly to the laptop.',
+              'The server answers with the web server’s MAC address.'],
+          why: 'The authoritative server holds the actual record. The TTL tells the resolver and the laptop how many seconds they may cache the answer, which is why the next visit skips most of these steps.',
+          path: ['auth', 'resolver', 'router', 'laptop'] },
+        { q: 'The laptop now knows the address 203.0.113.80. What does the browser do before sending any web traffic?',
+          a: ['It opens a TCP connection to port 443 with a three-way handshake: SYN, SYN-ACK, ACK.',
+              'It sends the HTTP request right away in a single UDP datagram to port 80.',
+              'It sends a TLS ClientHello to the DNS resolver on port 53.',
+              'It requests a DHCP lease from the web server.'],
+          why: 'HTTPS over HTTP/1.1 or HTTP/2 runs on TCP, so a connection must be set up first; the packets travel through the home router, which is the laptop’s default gateway. (HTTP/3 instead runs over QUIC on UDP, which combines the transport and TLS handshakes.)',
+          path: ['laptop', 'router', 'net', 'web', 'net', 'router', 'laptop'] },
+        { q: 'The TCP connection is open. What comes next?',
+          a: ['A TLS handshake: the browser sends a ClientHello, the server proves its identity with a certificate for shop.example.com, and both sides agree on session keys.',
+              'The browser sends the HTTP request in plain text and switches to encryption afterward.',
+              'The server sends the home page immediately, without waiting for a request.',
+              'The browser asks the DNS resolver to confirm that the server is trustworthy.'],
+          why: 'TLS authenticates the server, because the browser checks that the certificate matches the name, is unexpired and chains to a trusted certificate authority, and it sets up the keys that encrypt everything that follows.',
+          path: ['laptop', 'router', 'net', 'web', 'net', 'router', 'laptop'] },
+        { q: 'The TLS handshake is complete. What does the browser send?',
+          a: ['An encrypted HTTP GET request for the path / with the host name shop.example.com.',
+              'A TCP FIN segment to close the connection.',
+              'An ICMP Echo Request to check that the server is still there.',
+              'An unencrypted HTTP request, since the handshake already proved who the server is.'],
+          why: 'The HTTP request now travels inside the TLS session, so devices along the way can see the server’s address but not the path, headers or cookies.',
+          path: ['laptop', 'router', 'net', 'web'] },
+        { q: 'The web server processes the request. What comes back?',
+          a: ['An encrypted HTTP response, such as 200 OK with the HTML page, which the browser parses before requesting images, scripts and styles.',
+              'A DNS answer containing the page.',
+              'An ARP reply with the server’s hardware address.',
+              'A new SYN-ACK to start a second connection.'],
+          why: 'The response comes back over the same TLS connection, and the browser reuses that connection for many of the follow-up requests the page needs.',
+          path: ['web', 'net', 'router', 'laptop'] },
+      ],
+      recap: 'To load the page, the laptop first had to turn the name into an address. Its own caches were empty, so it asked its recursive resolver, which walked the DNS hierarchy from a root server to the .com servers to example.com’s authoritative server and came back with 203.0.113.80. The browser then opened a TCP connection to port 443 with a three-way handshake, ran a TLS handshake to check the server’s certificate and agree on keys, and finally sent an encrypted HTTP request and received the encrypted response.',
+    },
+    {
+      title: 'Pinging a device on your network',
+      intro: 'Your laptop (192.168.1.20, subnet mask 255.255.255.0) runs ping 192.168.1.30 to check on the desktop PC in the next room. The laptop has never talked to that PC before.',
+      nodes: [
+        ['laptop', 'Laptop', '192.168.1.20', 90, 60], ['switch', 'Switch', 'in home router', 360, 130],
+        ['pc', 'Desktop PC', '192.168.1.30', 630, 60], ['tv', 'Smart TV', '192.168.1.22', 90, 200],
+        ['phone', 'Phone', '192.168.1.21', 630, 200],
+      ],
+      links: ['laptop-switch', 'pc-switch', 'tv-switch', 'phone-switch'],
+      steps: [
+        { q: 'How does the laptop decide where to send the ping?',
+          a: ['It compares the destination with its own subnet: both addresses are in 192.168.1.0/24, so it delivers the packet directly on the local network.',
+              'It sends the packet to its default gateway, because every packet must go through the router.',
+              'It asks the DNS resolver for a route to 192.168.1.30.',
+              'It sends the packet to the ISP, which routes it back in.'],
+          why: 'A host only uses its default gateway for destinations outside its own subnet. Applying the mask 255.255.255.0 to both addresses gives the same network, 192.168.1.0.',
+          path: ['laptop'] },
+        { q: 'To build the Ethernet frame, the laptop needs the PC’s MAC address, which is not in its ARP cache. What does it send?',
+          a: ['An ARP request broadcast to ff:ff:ff:ff:ff:ff that asks, “Who has 192.168.1.30? Tell 192.168.1.20.”',
+              'A DNS query asking for the MAC address of 192.168.1.30.',
+              'A unicast ARP request to the router, which keeps a list of every MAC address.',
+              'A DHCP Discover asking for the PC’s hardware address.'],
+          why: 'ARP maps an IPv4 address to a MAC address on the local link. The laptop doesn’t know whom to ask, so it broadcasts the question to everyone on the segment.',
+          path: ['laptop', 'switch'] },
+        { q: 'The switch receives the broadcast frame. What does it do with it?',
+          a: ['It floods the frame out of every port except the one it arrived on, and learns that the laptop’s MAC address is on the incoming port.',
+              'It drops the frame, because switches block broadcasts.',
+              'It forwards the frame only to the router.',
+              'It answers the ARP request itself from its own table.'],
+          why: 'Broadcast frames go to every port in the same network segment (VLAN). Switches also learn source MAC addresses from every frame they see, which builds the table they use to forward later frames.',
+          paths: [['switch', 'pc'], ['switch', 'tv'], ['switch', 'phone']] },
+        { q: 'Every device receives the ARP request. Who answers, and how?',
+          a: ['Only 192.168.1.30 answers, with a unicast ARP reply sent straight to the laptop that contains its MAC address.',
+              'Every device answers, and the laptop picks the first reply.',
+              'The switch answers on behalf of the PC.',
+              'The PC broadcasts its reply so that every device can update its cache.'],
+          why: 'Devices that don’t own the requested address ignore the request. The PC replies directly, because the request already told it the laptop’s MAC address, and it usually caches that address too.',
+          path: ['pc', 'switch', 'laptop'] },
+        { q: 'The laptop stores the PC’s MAC address in its ARP cache. What does ping send now?',
+          a: ['An ICMP Echo Request inside an IP packet, in an Ethernet frame addressed to the PC’s MAC address.',
+              'A TCP SYN to port 7 on the PC.',
+              'A UDP datagram to port 53 on the PC.',
+              'Another ARP request, to confirm the first answer.'],
+          why: 'Ping uses ICMP, which runs directly on top of IP without TCP or UDP ports. The IP header carries the PC’s IP address, and the Ethernet header carries its MAC address.',
+          path: ['laptop', 'switch'] },
+        { q: 'How does the switch forward the Echo Request?',
+          a: ['Only out of the PC’s port, because it learned the PC’s MAC address from the ARP reply.',
+              'Out of every port, like the broadcast before it.',
+              'To the router first, which then forwards it to the PC.',
+              'It drops it, because ICMP is not allowed on a switch.'],
+          why: 'Once the switch has seen a frame from a MAC address, it knows which port that address lives on and sends unicast frames for it only there.',
+          path: ['switch', 'pc'] },
+        { q: 'The PC receives the Echo Request. What does it send back?',
+          a: ['An ICMP Echo Reply that echoes the identifier, sequence number and data, so ping can match it and show the round-trip time.',
+              'A TCP RST, because no program is listening.',
+              'An ICMP Time Exceeded message.',
+              'An ICMP Destination Unreachable message.'],
+          why: 'The reply comes straight back through the switch. (Simplified: some hosts have a firewall that ignores pings, in which case ping simply times out.)',
+          path: ['pc', 'switch', 'laptop'] },
+      ],
+      recap: 'Because the PC was on the same subnet, the laptop didn’t need the router at all. It broadcast an ARP request to find the PC’s MAC address, the switch flooded that request to every port, and only the PC answered with a unicast ARP reply. With the MAC address cached, the laptop sent an ICMP Echo Request that the switch delivered only to the PC’s port, and the PC answered with an ICMP Echo Reply.',
+    },
+    {
+      title: 'Reaching the internet through home NAT',
+      intro: 'Your laptop (192.168.1.20) opens a secure connection to a server at 198.51.100.25 on port 443. Your home router has the private address 192.168.1.1 on the inside and the public address 203.0.113.7 from your ISP on the outside.',
+      nodes: [
+        ['laptop', 'Laptop', '192.168.1.20', 70, 60], ['phone', 'Phone', '192.168.1.21', 70, 200],
+        ['router', 'Home router', '203.0.113.7', 250, 130], ['isp', 'ISP network', '', 440, 130],
+        ['host', 'Internet host', '192.0.2.99', 630, 50], ['server', 'Server', '198.51.100.25', 630, 210],
+      ],
+      links: ['laptop-router', 'phone-router', 'router-isp', 'isp-host', 'isp-server'],
+      steps: [
+        { q: 'The destination 198.51.100.25 is not on the laptop’s subnet. Where does the laptop send the packet?',
+          a: ['To its default gateway: the frame goes to the router’s MAC address, while the IP destination stays 198.51.100.25.',
+              'Straight to the server’s MAC address.',
+              'As a broadcast to every device on the network.',
+              'To the DNS resolver, which forwards it.'],
+          why: 'MAC addresses only matter on the local link, so the laptop hands the packet to the next hop, its gateway, without changing the IP addresses inside.',
+          path: ['laptop', 'router'] },
+        { q: 'The packet leaves the laptop with source 192.168.1.20 and source port 51000. Why can’t the router send it to the ISP unchanged?',
+          a: ['192.168.1.20 is a private (RFC 1918) address that is not routed on the public internet, so the reply could never find its way back.',
+              'Port 51000 is not a valid source port.',
+              'Packets that leave a home network must be encrypted first.',
+              'The ISP only accepts UDP traffic from homes.'],
+          why: 'Millions of homes use the same private ranges, so these addresses mean nothing on the internet. Only the router’s public address is unique and reachable.',
+          path: ['router'] },
+        { q: 'What does the router do to the outgoing packet?',
+          a: ['It rewrites the source to its public address 203.0.113.7, often with a new source port such as 40001, and records the mapping in its NAT translation table.',
+              'It rewrites the destination address to 192.168.1.1.',
+              'It encrypts the packet so that the ISP cannot read it.',
+              'It replaces the source IP address with the laptop’s MAC address.'],
+          why: 'This is source NAT with port translation, also called NAPT or masquerading. The table entry links 192.168.1.20:51000 to 203.0.113.7:40001 for this connection to 198.51.100.25:443.',
+          path: ['router', 'isp', 'server'] },
+        { q: 'The packet reaches the server. What source address and port does the server see?',
+          a: ['203.0.113.7 and port 40001, the router’s public side of the mapping.',
+              '192.168.1.20 and port 51000, the laptop’s own values.',
+              'The laptop’s MAC address.',
+              'The address of the ISP’s DNS resolver.'],
+          why: 'The server never learns the laptop’s private address. As far as it can tell, the connection comes from the router.',
+          path: ['server'] },
+        { q: 'The server replies to 203.0.113.7, port 40001. What does the router do when the reply arrives?',
+          a: ['It finds the matching entry in its translation table, rewrites the destination back to 192.168.1.20 port 51000, and forwards the packet onto the home network.',
+              'It drops the reply, because it was sent to the router itself.',
+              'It broadcasts the reply to every device on the home network.',
+              'It sends the reply back to the server as an error.'],
+          why: 'The translation table is what makes NAT work in both directions: replies to the public address and port are mapped back to the device that started the connection.',
+          path: ['server', 'isp', 'router', 'laptop'] },
+        { q: 'Your phone (192.168.1.21) also connects to 198.51.100.25:443 and happens to pick source port 51000 too. How does the router keep the two connections apart?',
+          a: ['It gives the phone’s connection a different public source port, such as 40002, so each table entry is unique.',
+              'It asks the ISP for a second public IP address for the phone.',
+              'It refuses the phone’s connection until the laptop’s connection ends.',
+              'It merges both connections and lets the devices sort out the data.'],
+          why: 'Port translation is what lets a whole household share one public address: every inside address and port pair gets its own public port.',
+          path: ['phone', 'router', 'isp', 'server'] },
+        { q: 'A host on the internet (192.0.2.99) sends an unsolicited packet to 203.0.113.7 on port 8080. There is no translation entry and no port forwarding rule for that port. What happens?',
+          a: ['The router has no mapping that tells it which inside device should get the packet, so it does not forward it inward, and typically drops it.',
+              'The router forwards it to every device on the home network.',
+              'The router forwards it to the laptop, because the laptop was the last device to send traffic.',
+              'The router forwards it to the first device that joined the network.'],
+          why: 'This is why hosting a server at home needs a port forwarding rule. NAT is not a firewall, but this side effect blocks most unsolicited inbound traffic.',
+          path: ['host', 'isp', 'router'] },
+      ],
+      recap: 'The laptop sent its packet to the router because the server was outside its subnet. The router replaced the private source 192.168.1.20:51000 with its public address and a port, 203.0.113.7:40001, and wrote the mapping into its translation table. The server replied to that public address, and the router used the table to send the reply back to the laptop. Different public ports keep each device’s connections apart, and inbound packets with no matching entry are not forwarded inside.',
+    },
+    {
+      title: 'Joining Wi-Fi and getting an address',
+      intro: 'Your laptop has just connected to your home Wi-Fi network. (Simplified: the Wi-Fi association and WPA2 or WPA3 authentication are already finished.) The laptop has no IP address yet, and the home router runs the DHCP server.',
+      nodes: [
+        ['laptop', 'Laptop', 'no address yet', 110, 130], ['router', 'Home router', 'DHCP 192.168.1.1', 380, 130],
+        ['tv', 'Smart TV', '192.168.1.22', 630, 50], ['phone', 'Phone', '192.168.1.21', 630, 210],
+      ],
+      links: ['laptop-router', 'router-tv', 'router-phone'],
+      steps: [
+        { q: 'The laptop needs an address, but it doesn’t know where the DHCP server is. What does it send first?',
+          a: ['A DHCP Discover, sent from 0.0.0.0 to the broadcast address 255.255.255.255, from UDP port 68 to UDP port 67.',
+              'A DHCP Request for the address 192.168.1.1.',
+              'An ARP request for the router’s address.',
+              'A DNS query for the name of the DHCP server.'],
+          why: 'Without an address of its own and without knowing the server, a broadcast is the only option. Every device on the network receives it, but only DHCP servers respond.',
+          paths: [['laptop', 'router', 'tv'], ['laptop', 'router', 'phone']] },
+        { q: 'The router’s DHCP server receives the Discover. What does it send back?',
+          a: ['A DHCP Offer that proposes an address, such as 192.168.1.20, together with the subnet mask, default gateway, DNS servers and lease time.',
+              'A DHCP Ack that confirms the laptop’s address immediately.',
+              'An ARP reply with its own MAC address.',
+              'A DNS response with the laptop’s new host name.'],
+          why: 'The Offer is only a proposal. The server picks a free address from its pool and includes the settings the laptop will need to reach other networks and resolve names.',
+          path: ['router', 'laptop'] },
+        { q: 'The laptop receives the Offer. What does it send next?',
+          a: ['A DHCP Request, still broadcast, that asks to use 192.168.1.20 from that specific server.',
+              'Nothing; it starts using the address right away.',
+              'A DHCP Release to give the address back.',
+              'Another Discover, to compare offers from other routers.'],
+          why: 'The Request is broadcast so that any other DHCP servers that also made an offer learn they weren’t chosen and can return their offered addresses to the pool.',
+          paths: [['laptop', 'router', 'tv'], ['laptop', 'router', 'phone']] },
+        { q: 'The DHCP server receives the Request. What happens?',
+          a: ['It sends a DHCP Ack that confirms the lease, and records the address as assigned to the laptop’s MAC address.',
+              'It sends a second Offer with a different address.',
+              'It always answers with a DHCP NAK the first time.',
+              'It sends a DHCP Decline to the laptop.'],
+          why: 'With the Ack, the lease is official. Discover, Offer, Request and Ack are often remembered as “DORA.”',
+          path: ['router', 'laptop'] },
+        { q: 'Before using 192.168.1.20, many clients do one more check. What is it?',
+          a: ['They send an ARP probe asking whether any device already uses 192.168.1.20, and decline the lease with a DHCP Decline if one answers.',
+              'They ping the DNS resolver until it answers.',
+              'They restart the Wi-Fi connection to apply the new settings.',
+              'They ask the ISP to approve the new address.'],
+          why: 'The DHCP standard recommends this check, because a device with a manually set address could already be using the one the server handed out.',
+          paths: [['laptop', 'router', 'tv'], ['laptop', 'router', 'phone']] },
+        { q: 'The lease lasts 24 hours. At about the halfway point (the T1 timer), what does the laptop do?',
+          a: ['It sends a unicast DHCP Request directly to the server to renew the lease.',
+              'It starts over with a broadcast Discover.',
+              'It gives up the address and waits for a new one.',
+              'It asks the DNS resolver to extend the lease.'],
+          why: 'Renewal goes straight to the server that granted the lease, because the laptop now knows its address. Only if that fails for longer (the T2 timer, at 87.5% by default) does it broadcast a renewal request to any server.',
+          path: ['laptop', 'router', 'laptop'] },
+      ],
+      recap: 'The laptop broadcast a DHCP Discover because it had no address and didn’t know where the server was. The router answered with an Offer that included an address and network settings, the laptop broadcast a Request for that offer, and the server confirmed it with an Ack. Many clients then check with ARP that nobody else is using the address, and halfway through the lease the laptop renews it with a unicast Request.',
+    },
+    {
+      title: 'A firewall blocking inbound traffic',
+      intro: 'A small office sits behind a stateful firewall with the public address 203.0.113.7. Its inbound policy allows only TCP port 443 to the office web server at 192.168.10.80 and ends with a rule that denies everything else. A host on the internet, 198.51.100.66, sends a TCP SYN to 203.0.113.7 on port 22 (SSH).',
+      nodes: [
+        ['host', 'Internet host', '198.51.100.66', 70, 130], ['net', 'Internet', '', 215, 130],
+        ['fw', 'Firewall', '203.0.113.7', 370, 130], ['web', 'Web server', '192.168.10.80', 600, 60],
+        ['pcs', 'Office PCs', '192.168.10.0/24', 600, 200],
+      ],
+      links: ['host-net', 'net-fw', 'fw-web', 'fw-pcs'],
+      steps: [
+        { q: 'The SYN for port 22 arrives at the firewall. How does the firewall evaluate it?',
+          a: ['It checks its state table for an existing connection, finds none for a new SYN, and then compares the packet with its rules in order.',
+              'It asks the web server whether it wants the connection.',
+              'It accepts every SYN, since a SYN carries no data.',
+              'It looks up the source address in DNS and allows it if a name exists.'],
+          why: 'A stateful firewall only applies its rule list to packets that don’t belong to a connection it already allowed. (Simplified: most firewalls use the first rule that matches, as here.)',
+          path: ['host', 'net', 'fw'] },
+        { q: 'No rule allows TCP port 22 from the internet. What happens to the SYN?',
+          a: ['The final deny rule matches, so the firewall discards the packet, and it may log it.',
+              'The firewall forwards it to the web server anyway.',
+              'The firewall forwards it to every office PC.',
+              'The firewall holds it until an administrator approves it.'],
+          why: 'Ending with “deny everything else” means anything not explicitly allowed is blocked, which is the safe default for inbound traffic.',
+          path: ['fw'] },
+        { q: 'This firewall is set to drop blocked packets silently. What does the sender experience?',
+          a: ['No answer at all: it retransmits the SYN a few times and then times out, and a port scanner would report the port as “filtered.”',
+              'An immediate TCP RST.',
+              'A SYN-ACK, followed by a closed connection.',
+              'An ICMP Echo Reply.'],
+          why: 'Silence gives an attacker as little information as possible, but it also makes legitimate clients wait for a timeout.',
+          path: ['host'] },
+        { q: 'If the firewall were set to reject instead of drop, what would the sender typically receive?',
+          a: ['A TCP RST or an ICMP Destination Unreachable message (administratively prohibited), so the connection fails right away.',
+              'An ICMP Time Exceeded message.',
+              'A DHCP NAK.',
+              'An HTTP 403 Forbidden page.'],
+          why: 'Rejecting is friendlier for legitimate users because it fails fast, but it confirms that a device is there.',
+          path: ['fw', 'net', 'host'] },
+        { q: 'Now a SYN arrives for port 443, which the policy allows and forwards to the web server. What does the firewall do?',
+          a: ['It translates the destination to 192.168.10.80:443 (destination NAT, or port forwarding), forwards the SYN, and creates a state entry for the connection.',
+              'It drops it, because all inbound SYNs are blocked.',
+              'It forwards it to every device inside the office.',
+              'It answers the request itself with the web page.'],
+          why: 'The allow rule matches, and the state entry records the connection so that later packets in both directions can be matched quickly.',
+          path: ['host', 'net', 'fw', 'web'] },
+        { q: 'The web server answers with a SYN-ACK. Does an outbound rule have to allow it explicitly?',
+          a: ['No. The packet matches the state entry, so the stateful firewall lets it through and rewrites the source back to 203.0.113.7.',
+              'Yes. Every reply needs its own rule, or it is dropped.',
+              'No, because firewalls never inspect outbound traffic.',
+              'Yes, and without that rule the server must send its reply over UDP.'],
+          why: 'Tracking state is what makes a stateful firewall practical: you write rules for who may start connections, and replies on those connections are allowed automatically.',
+          path: ['web', 'fw', 'net', 'host'] },
+      ],
+      recap: 'The firewall first checked whether each packet belonged to a known connection, and then compared new connection attempts with its rules in order. The SSH attempt matched only the final deny rule and was dropped silently, so the sender saw nothing and timed out; a reject setting would have sent back a RST or an ICMP error instead. The HTTPS attempt matched an allow rule, was forwarded to the internal web server with destination NAT, and its replies passed back out because they matched the state entry.',
+    },
+    {
+      title: 'Sending an email',
+      intro: 'Alice, whose address is alice@example.org, writes an email to bob@example.net in the mail app on her laptop and clicks Send.',
+      nodes: [
+        ['alice', 'Alice’s laptop', '', 70, 60], ['sub', 'smtp.example.org', 'submission', 250, 60],
+        ['dns', 'DNS resolver', '', 250, 200], ['mx', 'mx1.example.net', 'incoming', 450, 60],
+        ['imap', 'imap.example.net', 'mailbox', 450, 200], ['bob', 'Bob’s laptop', '', 640, 200],
+      ],
+      links: ['alice-sub', 'sub-dns', 'sub-mx', 'mx-imap', 'imap-bob'],
+      steps: [
+        { q: 'Where does Alice’s mail app send the message?',
+          a: ['To her own provider’s submission server, smtp.example.org, over SMTP on port 587 with STARTTLS or port 465 with TLS, after she logs in.',
+              'Directly to Bob’s laptop.',
+              'To Bob’s IMAP server on port 993.',
+              'To the DNS resolver, which delivers it.'],
+          why: 'Mail apps hand outgoing mail to their own provider through an authenticated submission service. The provider takes care of finding the recipient’s server.',
+          path: ['alice', 'sub'] },
+        { q: 'smtp.example.org accepts the message and needs to deliver it to example.net. What does it look up?',
+          a: ['The MX records of example.net in DNS, which name the servers that accept mail for that domain.',
+              'The A record of bob.example.net.',
+              'The reverse DNS (PTR) record of Alice’s laptop.',
+              'The MX records of example.org, its own domain.'],
+          why: 'The domain after the @ decides where mail goes, and MX records exist exactly to answer “which servers receive mail for this domain?”',
+          path: ['sub', 'dns', 'sub'] },
+        { q: 'DNS returns two records: MX 10 mx1.example.net and MX 20 mx2.example.net. Which server does smtp.example.org try first?',
+          a: ['mx1.example.net, because a lower preference number is preferred; it falls back to mx2 only if mx1 can’t be reached.',
+              'mx2.example.net, because a higher number means a higher priority.',
+              'Both at once, so the message arrives twice for safety.',
+              'Whichever answers a ping first.'],
+          why: 'MX preference works like a ranking, where lower is better. The sending server then looks up the chosen host’s address with an A or AAAA query.',
+          path: ['sub'] },
+        { q: 'How does smtp.example.org hand the message to mx1.example.net?',
+          a: ['It opens an SMTP connection to port 25, usually upgrades it with STARTTLS, and sends the EHLO, MAIL FROM, RCPT TO and DATA commands.',
+              'It uploads the message with an IMAP APPEND command on port 143.',
+              'It sends an HTTP POST to port 443.',
+              'It logs in on port 587 with Alice’s password.'],
+          why: 'Server-to-server relay uses port 25 and doesn’t need a user login. Port 587 is for users submitting mail to their own provider.',
+          path: ['sub', 'mx'] },
+        { q: 'mx1.example.net receives the message. What does it typically do before Bob can read it?',
+          a: ['It checks the message, for example with SPF, DKIM, DMARC and spam filtering, and then stores it in Bob’s mailbox.',
+              'It sends it back to Alice to confirm that she meant to send it.',
+              'It pushes it straight to Bob’s laptop over SMTP on port 25.',
+              'It deletes it unless Bob is online at that moment.'],
+          why: 'SPF, DKIM and DMARC help the receiving server judge whether the message really comes from example.org. Accepted mail waits in the mailbox until Bob’s app fetches it.',
+          path: ['mx', 'imap'] },
+        { q: 'Later, Bob opens his mail app. How does it get the new message?',
+          a: ['It connects to imap.example.net with IMAP over TLS on port 993, logs in, and downloads the message, which stays on the server.',
+              'It connects to the server with SMTP on port 25 and asks for new mail.',
+              'It looks up the MX record of its own address and waits for a delivery.',
+              'The mail server pushes the message to the laptop with DHCP.'],
+          why: 'SMTP moves mail toward the recipient’s server, while IMAP (or the older POP3) is what a mail app uses to read it. With IMAP, the mailbox stays on the server so every device sees the same messages.',
+          path: ['imap', 'bob'] },
+      ],
+      recap: 'Alice’s app submitted the message to her own provider over authenticated SMTP on port 587 or 465. Her provider looked up the MX records for example.net, chose the server with the lowest preference number, and relayed the message to it over SMTP on port 25. The receiving server checked the message and stored it in Bob’s mailbox, and Bob’s app later fetched it with IMAP over TLS.',
+    },
+    {
+      title: 'Connecting through a VPN',
+      intro: 'You are working from a café and start your company’s VPN client. The company’s VPN gateway is at 203.0.113.10, and the internal web server you need is at 10.20.0.15, an address that is only reachable inside the company network.',
+      nodes: [
+        ['laptop', 'Laptop', 'café Wi-Fi', 70, 130], ['cafe', 'Café router', '', 200, 130],
+        ['net', 'Internet', '', 345, 130], ['gw', 'VPN gateway', '203.0.113.10', 495, 130],
+        ['intra', 'Intranet', '10.20.0.15', 640, 130], ['news', 'news.example', '', 345, 215],
+      ],
+      links: ['laptop-cafe', 'cafe-net', 'net-gw', 'gw-intra', 'net-news'],
+      steps: [
+        { q: 'Before the tunnel can carry any of your traffic, what has to happen?',
+          a: ['The VPN client and the gateway run a handshake in which they authenticate each other and agree on encryption keys.',
+              'The café router installs your company’s certificate.',
+              'The client sends your traffic unencrypted first, to test the path.',
+              'The café’s DHCP server assigns you a company address.'],
+          why: 'Whatever the protocol, such as IPsec with IKE or WireGuard, the two ends must prove who they are and derive shared keys before any data can be protected.',
+          path: ['laptop', 'cafe', 'net', 'gw', 'net', 'cafe', 'laptop'] },
+        { q: 'The tunnel is up, and the client has an inside address, 10.8.0.5, on a virtual network interface. You open http://10.20.0.15. How does the laptop decide to use the tunnel?',
+          a: ['Its routing table now has a route for the company network (10.20.0.0/16 here) that points at the VPN’s virtual interface.',
+              'The café router recognizes company traffic and redirects it.',
+              'The DNS resolver tells the laptop to use the tunnel.',
+              'It sends an ARP request for 10.20.0.15 on the café network.'],
+          why: 'The VPN client installs routes when it connects. The laptop picks the most specific matching route, which sends company traffic into the tunnel.',
+          path: ['laptop'] },
+        { q: 'What does the VPN client do with the packet from 10.8.0.5 to 10.20.0.15?',
+          a: ['It encrypts the whole packet and wraps it in a new outer packet addressed from the laptop’s café address to 203.0.113.10.',
+              'It sends the packet unchanged, since 10.20.0.15 can be reached over the internet.',
+              'It changes the destination to 203.0.113.10 but leaves the contents unencrypted.',
+              'It splits the packet so that half goes over the café network and half over a mobile network.'],
+          why: 'Encapsulation is the heart of a VPN: the inner packet, with its private addresses and data, is hidden inside an outer packet that the internet can route.',
+          path: ['laptop', 'cafe', 'net', 'gw'] },
+        { q: 'The outer packets cross the café network and the internet. What can the café’s network operator see?',
+          a: ['That the laptop is exchanging encrypted traffic with 203.0.113.10, along with packet sizes and timing, but not the inner addresses or content.',
+              'The full intranet page you are reading.',
+              'Nothing at all, not even the gateway’s address.',
+              'The inner destination 10.20.0.15, but not the content.'],
+          why: 'The outer header must stay readable so routers can deliver it, so a VPN hides what you send and to which inside host, but not that you are using a VPN.',
+          path: ['cafe'] },
+        { q: 'The VPN gateway receives the outer packet. What does it do?',
+          a: ['It checks and decrypts it, recovers the inner packet, and routes that packet onto the company network to 10.20.0.15.',
+              'It forwards the still-encrypted packet to the intranet server.',
+              'It sends the packet back to the café router.',
+              'It broadcasts the packet to every server in the company.'],
+          why: 'The gateway is the other end of the tunnel. After decryption, the inner packet looks like any other internal traffic from 10.8.0.5.',
+          path: ['gw', 'intra'] },
+        { q: 'The intranet server replies to 10.8.0.5. How does the reply reach your laptop?',
+          a: ['The company network routes 10.8.0.0/24 to the VPN gateway, which encrypts the reply and sends it through the tunnel to the address your tunnel packets come from.',
+              'The server sends the reply straight to the café over the internet.',
+              'The reply is broadcast across the internet until the laptop answers.',
+              'The server waits until the laptop asks for the reply again.'],
+          why: 'Tunnel addresses such as 10.8.0.0/24 are routed to the gateway internally. (Simplified: the address the gateway sends to is usually the café router’s public NAT address.)',
+          path: ['intra', 'gw', 'net', 'cafe', 'laptop'] },
+        { q: 'The VPN uses split tunneling. You now open https://news.example. Which path does that traffic take?',
+          a: ['It goes straight out through the café’s network and not through the tunnel, because only the company routes point at the VPN interface.',
+              'It always goes through the tunnel, because a VPN carries all traffic.',
+              'It is blocked while the VPN is connected.',
+              'It goes through the tunnel and then back out through the café router.'],
+          why: 'With split tunneling, only traffic for company networks uses the VPN. With a full tunnel, the default route would point at the VPN too, and this traffic would leave through the company’s connection instead.',
+          path: ['laptop', 'cafe', 'net', 'news'] },
+      ],
+      recap: 'The VPN client and gateway first authenticated each other and agreed on keys. The client then added routes for the company network, so packets for 10.20.0.15 were encrypted and wrapped in outer packets addressed to the gateway, and the café could only see encrypted traffic to 203.0.113.10. The gateway decrypted them and passed them to the intranet server, whose replies came back through the gateway and the tunnel. With split tunneling, everything else went straight out to the internet.',
+    },
+    {
+      title: 'Tracing the route to a server',
+      intro: 'You run traceroute 203.0.113.50 on a Linux laptop to see which routers your traffic passes through on its way to a distant server.',
+      nodes: [
+        ['laptop', 'Laptop', '192.168.1.20', 60, 130], ['r1', 'Home router', '192.168.1.1', 200, 130],
+        ['r2', 'ISP router', '198.51.100.1', 345, 130], ['r3', 'Transit router', '192.0.2.254', 495, 130],
+        ['dest', 'Server', '203.0.113.50', 645, 130],
+      ],
+      links: ['laptop-r1', 'r1-r2', 'r2-r3', 'r3-dest'],
+      steps: [
+        { q: 'What is special about the first probe that traceroute sends?',
+          a: ['Its IP time-to-live (TTL) is set to 1.',
+              'Its TTL is set to 255, the maximum.',
+              'It is addressed to the first router instead of the server.',
+              'It carries a list that each router adds its address to.'],
+          why: 'Every router that forwards a packet lowers its TTL by one. Starting at 1 guarantees that the probe expires at the very first router.',
+          path: ['laptop', 'r1'] },
+        { q: 'The home router receives the probe with a TTL of 1. What happens?',
+          a: ['It decrements the TTL to 0, discards the probe, and sends back an ICMP Time Exceeded message, which reveals its address, 192.168.1.1.',
+              'It forwards the probe with a TTL of 0.',
+              'It answers with an ICMP Echo Reply.',
+              'It drops the probe silently, every time.'],
+          why: 'The TTL exists to stop packets from looping forever. The Time Exceeded message is sent from the router’s own address, which is how traceroute learns who hop 1 is.',
+          path: ['r1', 'laptop'] },
+        { q: 'What does traceroute do next?',
+          a: ['It sends probes with a TTL of 2, normally three of them, so they expire one router further along, at the ISP router.',
+              'It sends a probe with a TTL of 1 addressed directly to the second router.',
+              'It raises the TTL by 10 to save time.',
+              'It asks the home router for its routing table.'],
+          why: 'Each round increases the TTL by one, so each hop reports itself in turn, and the times of the three probes show the round-trip delay to that hop.',
+          path: ['laptop', 'r1', 'r2', 'r1', 'laptop'] },
+        { q: 'Hop 3 shows * * *, but hop 4 answers normally. What is the most likely explanation?',
+          a: ['The router at hop 3 doesn’t send ICMP Time Exceeded messages (or limits or filters them), but it still forwards traffic.',
+              'The probes were lost and the trace has failed.',
+              'The router at hop 3 is down.',
+              'Hop 3 uses IPv6, which traceroute cannot display.'],
+          why: 'If hop 3 were really down, hop 4 couldn’t answer either, because the probes for hop 4 pass through hop 3.',
+          path: ['laptop', 'r1', 'r2', 'r3'] },
+        { q: 'Linux traceroute sends UDP probes to high, unlikely port numbers, starting at 33434. When a probe finally reaches 203.0.113.50 itself, what does the server send back?',
+          a: ['An ICMP Destination Unreachable (port unreachable) message, which tells traceroute that it has reached the target and can stop.',
+              'An ICMP Time Exceeded message, like the routers.',
+              'A TCP SYN-ACK.',
+              'A UDP reply that contains the server’s host name.'],
+          why: 'No program listens on those ports, so the server reports “port unreachable,” and that different reply marks the end of the route.',
+          path: ['laptop', 'r1', 'r2', 'r3', 'dest', 'r3', 'r2', 'r1', 'laptop'] },
+        { q: 'The tracert command on Windows uses the same TTL trick, with one difference in its probes. What is it?',
+          a: ['It sends ICMP Echo Requests, so the final hop answers with an ICMP Echo Reply.',
+              'It sends TCP SYNs to port 80.',
+              'It doesn’t use the TTL at all.',
+              'It sends ARP requests to every router.'],
+          why: 'Routers still answer with Time Exceeded along the way; only the probe type, and therefore the final reply, differs.',
+          path: ['laptop', 'r1', 'r2', 'r3', 'dest', 'r3', 'r2', 'r1', 'laptop'] },
+      ],
+      recap: 'Traceroute maps a path by sending probes with a TTL of 1, then 2, then 3, and so on. Each router lowers the TTL, and the router where it reaches zero discards the probe and sends back an ICMP Time Exceeded message, revealing itself. Hops that show asterisks usually just don’t send those messages. The destination answers differently, with Port Unreachable for Linux UDP probes or an Echo Reply for Windows ICMP probes, which tells traceroute that the trace is complete.',
+    },
+  ];
+
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, streak: 0, order: [], si: 0, step: 0, done: 0, opts: [], anim: 0 };
+  $('best').textContent = best.toLocaleString('en-US');
+  const sc = () => SCENARIOS[s.order[s.si]];
+  const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+  function hud() {
+    $('score').textContent = s.score.toLocaleString('en-US');
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', plural(s.lives, 'life', 'lives'));
+  }
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  // --- Diagram ---
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
+  let pos = {}, nodeEls = {}, lineEls = {}, pkts = [];
+  function drawNet(scn) {
+    const svg = $('net');
+    svg.textContent = '';
+    pos = {}; nodeEls = {}; lineEls = {}; pkts = [];
+    scn.nodes.forEach(([id, , , x, y]) => { pos[id] = [x, y]; });
+    scn.links.forEach(l => {
+      const [a, b] = l.split('-');
+      const ln = el('line', { x1: pos[a][0], y1: pos[a][1], x2: pos[b][0], y2: pos[b][1] });
+      lineEls[`${a}-${b}`] = lineEls[`${b}-${a}`] = ln;
+      svg.append(ln);
+    });
+    scn.nodes.forEach(([id, label, sub, x, y]) => {
+      const g = el('g', { class: 'node' });
+      g.append(el('rect', { x: x - 62, y: y - 22, width: 124, height: 44, rx: 6 }));
+      const t = el('text', { x, y: sub ? y - 3 : y + 5 }); t.textContent = label; g.append(t);
+      if (sub) { const t2 = el('text', { x, y: y + 13, class: 'sub' }); t2.textContent = sub; g.append(t2); }
+      nodeEls[id] = g;
+      svg.append(g);
+    });
+    svg.setAttribute('aria-label', `Network diagram with ${scn.nodes.map(n => n[1]).join(', ')}.`);
+  }
+  function clearMarks() {
+    cancelAnimationFrame(s.anim);
+    Object.values(nodeEls).forEach(g => g.classList.remove('hot', 'cur'));
+    Object.values(lineEls).forEach(l => l.classList.remove('hot'));
+    pkts.forEach(p => p.remove()); pkts = [];
+  }
+  const stepPaths = st => st.paths || [st.path];
+  function markCurrent(st) {
+    clearMarks();
+    const at = stepPaths(st)[0][0];
+    nodeEls[at].classList.add('cur');
+    addPacket(pos[at]);
+  }
+  function addPacket([x, y]) { const c = el('circle', { cx: x, cy: y - 30, r: 7, class: 'pkt' }); $('net').append(c); pkts.push(c); return c; }
+  function playPaths(paths) {
+    clearMarks();
+    paths.forEach(p => p.forEach((id, i) => {
+      nodeEls[id].classList.add('hot');
+      if (i && lineEls[`${p[i - 1]}-${id}`]) lineEls[`${p[i - 1]}-${id}`].classList.add('hot');
+    }));
+    const dots = paths.map(p => ({ p, c: addPacket(pos[p[0]]) }));
+    const place = (d, t) => {
+      const segs = d.p.length - 1;
+      if (segs < 1) return;
+      const f = Math.max(0, Math.min(t, segs)), i = Math.min(Math.floor(f), segs - 1), u = f - i;
+      const [x1, y1] = pos[d.p[i]], [x2, y2] = pos[d.p[i + 1]];
+      d.c.setAttribute('cx', x1 + (x2 - x1) * u);
+      d.c.setAttribute('cy', y1 + (y2 - y1) * u - 30);
+    };
+    if (reduced) { dots.forEach(d => place(d, d.p.length - 1)); return; }
+    const t0 = performance.now(), SEG = 420;
+    const frame = now => {
+      const t = (now - t0) / SEG;
+      dots.forEach(d => place(d, t));
+      if (dots.some(d => t < d.p.length - 1)) s.anim = requestAnimationFrame(frame);
+    };
+    s.anim = requestAnimationFrame(frame);
+  }
+
+  // --- Game flow ---
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, streak: 0, si: 0, done: 0, order: Arcade.shuffle(SCENARIOS.map((_, i) => i)) });
+    $('ov').hidden = true;
+    hud();
+    beginScenario();
+  }
+  function beginScenario() {
+    const scn = sc();
+    s.step = 0; s.flawless = true;
+    $('scen').textContent = `Scenario ${s.si + 1} of ${SCENARIOS.length}: ${scn.title}`;
+    $('intro').textContent = scn.intro;
+    drawNet(scn);
+    ask();
+  }
+  function ask() {
+    const scn = sc(), st = scn.steps[s.step];
+    $('stepn').textContent = `Step ${s.step + 1} of ${scn.steps.length}`;
+    $('q').textContent = st.q;
+    $('fb').textContent = '';
+    $('next').hidden = true;
+    s.opts = Arcade.shuffle(st.a.map((text, i) => ({ text, right: i === 0 })));
+    const box = $('choices');
+    box.textContent = '';
+    s.opts.forEach((o, i) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'choice';
+      b.innerHTML = `<kbd>${i + 1}</kbd><span></span>`;
+      b.querySelector('span').textContent = o.text;
+      b.addEventListener('click', () => answer(i));
+      box.append(b);
+    });
+    markCurrent(st);
+    s.state = 'ask';
+    $('q').focus();
+  }
+  function para(text, cls) { const p = document.createElement('p'); p.textContent = text; if (cls) p.className = cls; $('fb').append(p); return p; }
+  function answer(i) {
+    if (s.state !== 'ask' || !s.opts[i]) return;
+    s.state = 'reveal';
+    const st = sc().steps[s.step], right = s.opts[i].right;
+    const btns = [...$('choices').children];
+    btns.forEach((b, j) => { b.disabled = true; if (s.opts[j].right) b.classList.add('right'); });
+    $('fb').textContent = '';
+    if (right) {
+      s.streak++;
+      const pts = STEP_PTS + 20 * Math.min(s.streak - 1, 5);
+      s.score += pts;
+      para(`Correct! +${plural(pts, 'point', 'points')}.`, 'head right');
+    } else {
+      btns[i].classList.add('wrong');
+      s.streak = 0; s.lives--; s.flawless = false;
+      para(`Not quite. The answer was: ${st.a[0]}`, 'head wrong');
+    }
+    para(st.why);
+    playPaths(stepPaths(st));
+    hud();
+    const last = s.step === sc().steps.length - 1;
+    $('next').textContent = s.lives <= 0 ? 'See results' : last ? 'Finish scenario' : 'Continue';
+    $('next').hidden = false;
+    $('next').focus();
+  }
+  function advance() {
+    if (s.state === 'reveal') {
+      if (s.lives <= 0) return gameOver();
+      if (s.step < sc().steps.length - 1) { s.step++; return ask(); }
+      // Scenario finished: bonus and recap.
+      s.state = 'recap';
+      s.done++;
+      s.score += BONUS;
+      hud();
+      $('fb').textContent = '';
+      para(`Scenario complete! +${plural(BONUS, 'bonus point', 'bonus points')}.`, 'head done');
+      para(sc().recap, 'recap');
+      $('q').textContent = `You finished “${sc().title}.” Here is the whole flow in one paragraph.`;
+      $('choices').textContent = '';
+      clearMarks();
+      $('next').textContent = s.si < SCENARIOS.length - 1 ? 'Next scenario' : 'See results';
+      $('next').focus();
+    } else if (s.state === 'recap') {
+      if (s.si < SCENARIOS.length - 1) { s.si++; return beginScenario(); }
+      gameOver(true);
+    }
+  }
+  function gameOver(won) {
+    s.state = 'over';
+    clearMarks();
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = best.toLocaleString('en-US');
+    const what = `You scored ${plural(s.score, 'point', 'points')} and completed ${plural(s.done, 'scenario', 'scenarios')}.`;
+    const tail = s.score > prev ? ' That’s a new best!' : (best ? ` Your best is ${best.toLocaleString('en-US')}.` : '');
+    showOverlay(won ? 'All scenarios complete' : 'Game over', what + tail, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (s.state === 'ask' && /^[1-4]$/.test(e.key)) { e.preventDefault(); answer(Number(e.key) - 1); }
+    else if ((s.state === 'reveal' || s.state === 'recap') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); advance(); }
+    else if ((s.state === 'ready' || s.state === 'over') && e.key === 'Enter') { e.preventDefault(); start(); }
+  });
+  $('go').addEventListener('click', start);
+  $('next').addEventListener('click', advance);
+  drawNet(SCENARIOS[0]);
+  $('go').focus();
+
+})();
+</script>

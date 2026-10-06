@@ -1,0 +1,362 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="arcade-hub">
+<title>Arcade</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: a console-style select screen. Section tabs on top; a list of games on the left and a large
+     preview of the focused game on the right. Below 760px the preview hides and list items carry their blurbs.
+     Keyboard-first: arrows move, Enter plays, 1–5 switch sections, / searches. */
+  .hub { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding-block: 8px 24px; }
+
+  .top { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 8px 20px; }
+  h1 { font-size: clamp(2rem, 7vw, 3.4rem); }
+  h1 { color: var(--snake); }
+  .home { display: inline-block; margin-bottom: 10px; color: var(--muted); font-size: 0.85rem; }
+  .home:hover, .home:focus-visible { color: var(--ink); }
+  .lede { margin: 8px 0 0; color: var(--muted); font-size: 0.9rem; line-height: 1.5; max-width: 52ch; }
+  .streak { margin: 0; font-size: 0.85rem; color: var(--muted); }
+  .streak strong { color: var(--food); font-weight: 600; }
+
+  /* Section tabs */
+  .tabs { display: flex; gap: 6px; overflow-x: auto; padding: 4px 4px 6px; margin: 0 -4px; scrollbar-width: thin; }
+  .tab {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    background: transparent; color: var(--muted); font-weight: 400;
+    box-shadow: inset 0 0 0 1px var(--grid); padding: 8px 12px;
+  }
+  .tab kbd { font-size: 0.72rem; }
+  .tab .n { font-size: 0.75rem; color: var(--muted); }
+  .tab[aria-selected="true"] { background: var(--board); color: var(--ink); box-shadow: inset 0 0 0 2px var(--ink); font-weight: 600; }
+
+  .search { display: flex; align-items: center; gap: 10px; }
+  .search input {
+    flex: 1; min-width: 0; font: 0.9rem var(--mono); color: var(--ink);
+    background: var(--board); border: 0; border-radius: 4px; padding: 10px 12px;
+    box-shadow: inset 0 0 0 1px var(--grid);
+  }
+  .search input::placeholder { color: var(--muted); }
+  .search input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  /* List + preview */
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 18px; align-items: start; }
+  .about { margin: 0 0 10px; color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+  .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .item {
+    display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 4px 12px;
+    padding: 10px 12px; border-radius: 4px; color: var(--ink); text-decoration: none;
+    background: transparent;
+  }
+  .item .sw { width: 10px; height: 10px; border-radius: 2px; background: var(--c); }
+  .item .t { font-weight: 600; }
+  .item .s { font-size: 0.75rem; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .item .d { grid-column: 2 / -1; font-size: 0.78rem; color: var(--muted); line-height: 1.45; display: none; }
+  @media (max-width: 760px) { .item .d { display: block; } }
+  .item:hover { background: color-mix(in srgb, var(--c) 8%, var(--ground)); }
+  .item:focus-visible, .item.current { outline: none; background: color-mix(in srgb, var(--c) 16%, var(--board)); box-shadow: inset 3px 0 0 var(--c); }
+  .item:focus-visible .t { color: var(--c); }
+  .empty { color: var(--muted); font-size: 0.85rem; margin: 8px 0; }
+
+  .preview {
+    position: sticky; top: 16px;
+    background: color-mix(in srgb, var(--c, var(--ink)) 9%, var(--board));
+    border-radius: 6px; padding: 26px 26px 22px;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--c, var(--ink)) 45%, transparent), 0 24px 50px -28px #000;
+    display: flex; flex-direction: column; gap: 14px; min-height: 300px;
+  }
+  .preview .sec { margin: 0; font-size: 0.8rem; color: var(--muted); }
+  .preview h2 {
+    font-family: var(--display); font-weight: 400; margin: 0; line-height: 1.02;
+    font-size: clamp(2rem, 4.6vw, 3.1rem); color: var(--c); text-wrap: balance;
+  }
+  .preview .blurb { margin: 0; line-height: 1.6; font-size: 0.95rem; max-width: 46ch; flex: 1; }
+  .preview .stat { margin: 0; font-size: 0.85rem; color: var(--muted); }
+  .preview .stat strong { color: var(--ink); font-weight: 600; }
+  .preview .play { margin: 6px 0 0; font-size: 0.9rem; }
+  .preview .play kbd { font-size: 0.95rem; padding: 2px 8px; border-color: var(--c); }
+
+  @media (max-width: 760px) { .stage { grid-template-columns: 1fr; } .preview { display: none; } }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .preview h2 { animation: drop 220ms ease-out; }
+    @keyframes drop { from { opacity: 0; transform: translateY(-6px); } }
+  }
+</style>
+
+<main class="hub">
+  <header class="top">
+    <div>
+      <a class="home" id="home" href="../" hidden>← Kalvetua</a>
+      <h1>Arcade</h1>
+      <p class="lede">Arcade games with a twist, quizzes, brain teasers, daily puzzles, and games that train real IT skills.</p>
+    </div>
+    <p class="streak" id="streak"></p>
+  </header>
+
+  <div class="tabs" role="tablist" aria-label="Game sections" id="tabs"></div>
+
+  <div class="search">
+    <input id="q" type="search" placeholder="Press / to search all games" aria-label="Search all games" autocomplete="off">
+  </div>
+
+  <div class="stage">
+    <section id="panel" role="tabpanel">
+      <p class="about" id="about"></p>
+      <ul class="list" id="list"></ul>
+    </section>
+    <aside class="preview" id="preview" aria-live="polite"></aside>
+  </div>
+
+  <p class="keys">Use <kbd>↑</kbd> and <kbd>↓</kbd> to choose a game and <kbd>Enter</kbd> to play it. Switch sections with <kbd>←</kbd> and <kbd>→</kbd> or the number keys <kbd>1</kbd> to <kbd>5</kbd>, and press <kbd>/</kbd> to search. From any game, press <kbd>Esc</kbd> to come back here.</p>
+  <p class="keys"><a href="credits.html" style="color: var(--muted)">Credits, licenses and privacy</a></p>
+</main>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  // Add new games here. `key` is the localStorage key the game writes its best score to;
+  // `bestLabel` describes what that number means. Daily entries use `daily` (the game id passed to Arcade.daily).
+  const SECTIONS = [
+    { id: 'daily', name: 'Daily',
+      about: 'The same three puzzles for everyone, new every day. Finish at least one each day to keep your streak going.' },
+    { id: 'arcade', name: 'Arcade', about: 'Classic action games with a twist.' },
+    { id: 'quiz', name: 'Quizzes and word games', about: 'Test your general knowledge, your sense of scale, and your vocabulary.' },
+    { id: 'brain', name: 'Brain teasers', about: 'Puzzles for memory, logic, and mental arithmetic.' },
+    { id: 'it', name: 'IT skills',
+      about: 'Practice real-world IT skills: the command line, networking, Git, code, and security.' },
+  ];
+
+  const GAMES = [
+    { s: 'daily', file: 'word-guess.html?daily', title: 'Daily Word Guess', color: '#5ce0a0', daily: 'word-guess',
+      blurb: 'One five-letter word for everyone today. You have six guesses to find it.' },
+    { s: 'daily', file: 'number-sequence.html?daily', title: 'Daily Sequence', color: '#7cc7ff', daily: 'sequence',
+      blurb: 'Five number patterns that get harder as you go. Everyone gets the same five today.' },
+    { s: 'daily', file: 'before-or-after.html?daily', title: 'Daily Before or After', color: '#f4b860', daily: 'before-after',
+      blurb: 'Put ten historical events in order, one before-or-after call at a time. The deck is the same for everyone today.' },
+
+    { s: 'arcade', file: 'shadow-snake.html', title: 'Shadow Snake', color: '#b9a7ff', key: 'shadowSnakeBest', bestLabel: 'Best score',
+      blurb: 'Classic Snake with a twist: a ghost of your snake retraces your path from five seconds ago, and touching it ends the game.' },
+    { s: 'arcade', file: 'dot-thief.html', title: 'Dot Thief', color: '#ff6b6b', key: 'dotThiefBest', bestLabel: 'Best score',
+      blurb: 'Turn the classic maze chase around: you are the night guard, and a thief is grabbing every coin in the vault. Corner the thief before the vault is empty.' },
+
+    { s: 'quiz', file: 'trivia-rush.html', title: 'Trivia Rush', color: '#ffd166', key: 'triviaRushBest', bestLabel: 'Best score',
+      blurb: 'Answer general-knowledge questions against the clock. Faster answers earn more points, and three wrong answers end the game.' },
+    { s: 'quiz', file: 'higher-lower.html', title: 'Higher or Lower', color: '#ff8a5c', key: 'higherLowerBest', bestLabel: 'Best streak',
+      blurb: 'Is it bigger, older, or taller? Compare two things at a time and see how long a streak you can build.' },
+    { s: 'quiz', file: 'word-guess.html', title: 'Word Guess', color: '#5ce0a0', key: 'wordGuessBest', bestLabel: 'Best streak',
+      blurb: 'Find the hidden five-letter word in six guesses, then keep going to build a winning streak.' },
+    { s: 'quiz', file: 'before-or-after.html', title: 'Before or After', color: '#f4b860', key: 'beforeAfterBest', bestLabel: 'Best score',
+      blurb: 'Did it happen before or after? Place historical events in the right spot on a growing timeline. Three misplaced events end the game.' },
+    { s: 'quiz', file: 'map-memory.html', title: 'Map From Memory', color: '#6fd3c6', key: 'mapMemoryBest', bestLabel: 'Best score',
+      blurb: 'A country’s outline draws itself line by line. Name the country before the drawing finishes to score the most points.' },
+    { s: 'quiz', file: 'two-truths.html', title: 'Two Truths and a Lie', color: '#ff7a90', key: 'twoTruthsBest', bestLabel: 'Best score',
+      blurb: 'You get three statements about a topic, and one of them is false. Spot the lie.' },
+
+    { s: 'brain', file: 'number-sequence.html', title: 'Sequence', color: '#7cc7ff', key: 'sequenceBest', bestLabel: 'Best score',
+      blurb: 'Figure out the pattern behind a row of numbers and type the next one. The puzzles get harder as you go.' },
+    { s: 'brain', file: 'memory-grid.html', title: 'Memory Grid', color: '#ff9bd2', key: 'memoryGridBest', bestLabel: 'Highest level',
+      blurb: 'A few tiles light up for a moment. Remember where they were, then pick them out again.' },
+    { s: 'brain', file: 'mental-math.html', title: 'Mental Math Sprint', color: '#a0e75a', key: 'mentalMathBest', bestLabel: 'Best score',
+      blurb: 'Numbers and operations flash by one at a time. Keep the running total in your head and type the result.' },
+    { s: 'brain', file: 'switch-off.html', title: 'Switch Off', color: '#ffe066', key: 'switchOffBest', bestLabel: 'Highest level',
+      blurb: 'Each press flips a light and its neighbors. Switch every light off in as few moves as you can.' },
+
+    { s: 'it', file: 'terminal-escape.html', title: 'Terminal Escape', color: '#4be38a', key: 'terminalEscapeBest', bestLabel: 'Levels completed',
+      blurb: 'Find your way out of a simulated Linux shell, learning one new command in each level.' },
+    { s: 'it', file: 'command-recall.html', title: 'Command Recall', color: '#7ee0ff', key: 'commandRecallBest', bestLabel: 'Best score',
+      blurb: 'Read a task in plain English and type the Linux, PowerShell, or Git command that does it.' },
+    { s: 'it', file: 'commit-rescue.html', title: 'Commit Rescue', color: '#f78c6c', key: 'commitRescueBest', bestLabel: 'Levels completed',
+      blurb: 'Untangle a broken repository with real Git commands and watch the commit graph change as you type.' },
+    { s: 'it', file: 'subnet-sprint.html', title: 'Subnet Sprint', color: '#82aaff', key: 'subnetSprintBest', bestLabel: 'Best score',
+      blurb: 'Work out network addresses, broadcast addresses, and host counts against the clock.' },
+    { s: 'it', file: 'port-match.html', title: 'Port Match', color: '#c792ea', key: 'portMatchBest', bestLabel: 'Best score',
+      blurb: 'Match protocols to their default port numbers before time runs out.' },
+    { s: 'it', file: 'packet-path.html', title: 'Packet Path', color: '#89ddff', key: 'packetPathBest', bestLabel: 'Best score',
+      blurb: 'Follow a packet across the network and choose what happens at each step, from DNS lookups to TLS handshakes.' },
+    { s: 'it', file: 'binary-blitz.html', title: 'Binary Blitz', color: '#c3e88d', key: 'binaryBlitzBest', bestLabel: 'Best score',
+      blurb: 'Convert between binary, decimal, and hex at speed, then take on bitwise operations.' },
+    { s: 'it', file: 'regex-golf.html', title: 'Regex Golf', color: '#ffcb6b', key: 'regexGolfBest', bestLabel: 'Best total score',
+      blurb: 'Write the shortest regular expression that matches every word in one list and none in the other.' },
+    { s: 'it', file: 'bug-hunt.html', title: 'Bug Hunt', color: '#f07178', key: 'bugHuntBest', bestLabel: 'Best score',
+      blurb: 'Find the buggy line in short JavaScript, Python, and SQL snippets, then explain what’s wrong with it.' },
+    { s: 'it', file: 'phish-or-legit.html', title: 'Phish or Legit', color: '#ff9e64', key: 'phishOrLegitBest', bestLabel: 'Best score',
+      blurb: 'Read each email and decide whether it’s a phishing attempt or the real thing, then see the warning signs you caught or missed.' },
+    { s: 'it', file: 'log-detective.html', title: 'Log Detective', color: '#b4c7ff', key: 'logDetectiveBest', bestLabel: 'Best score',
+      blurb: 'Scan server logs and flag the lines that reveal an attack before time runs out.' },
+  ];
+
+  const $ = id => document.getElementById(id);
+  // The link to the main site only makes sense when hosted there, not when opened from disk.
+  if (location.hostname.endsWith('github.io')) $('home').hidden = false;
+  const fmt = n => n.toLocaleString('en-US');
+
+  // What to show for a game's progress, in a short form for the list and a sentence for the preview.
+  function status(g) {
+    if (g.daily) {
+      const r = Arcade.dailyResult(g.daily);
+      if (!r) return { short: 'Not played today', long: 'You haven’t played today’s puzzle yet.' };
+      if (g.daily === 'word-guess') {
+        if (!r.solved) return { short: 'Missed today', long: 'You didn’t find today’s word. A new one arrives tomorrow.' };
+        const n = `${r.guesses} ${r.guesses === 1 ? 'guess' : 'guesses'}`;
+        return { short: `Solved in ${r.guesses}`, long: `You solved today’s word in ${n}.` };
+      }
+      if (g.daily === 'sequence') return { short: `${r.correct} of ${r.total}`, long: `You got ${r.correct} of ${r.total} patterns right today.` };
+      return { short: `${r.score} of ${r.total}`, long: `You placed ${r.score} of ${r.total} events correctly today.` };
+    }
+    const b = Arcade.best(g.key);
+    if (!b) return { short: 'New', long: 'You haven’t played this one yet.' };
+    return { short: fmt(b), long: `${g.bestLabel}: <strong>${fmt(b)}</strong>` };
+  }
+
+  // Streak line in the header.
+  const streak = Arcade.dailyStreak();
+  $('streak').innerHTML = streak
+    ? `Daily streak: <strong>${streak} ${streak === 1 ? 'day' : 'days'}</strong>`
+    : 'Play a daily puzzle to start a streak.';
+
+  // Tabs
+  const tabs = SECTIONS.map((sec, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tab';
+    b.setAttribute('role', 'tab');
+    b.tabIndex = -1;
+    const count = GAMES.filter(g => g.s === sec.id).length;
+    b.innerHTML = `<kbd aria-hidden="true">${i + 1}</kbd><span></span><span class="n">${count}</span>`;
+    b.querySelector('span').textContent = sec.name;
+    b.setAttribute('aria-label', `${sec.name}, ${count} games`);
+    b.addEventListener('click', () => { show(sec.id); focusItem(pos[sec.id] || 0); });
+    $('tabs').append(b);
+    return b;
+  });
+
+  // State: the current section (or search), and the focused item in each section.
+  const store = (k, v) => { try { v === undefined ? (v = sessionStorage.getItem(k)) : sessionStorage.setItem(k, v); } catch {} return v; };
+  let current = store('hubSection') || defaultSection();
+  let items = [], shown = [], query = '';
+  const pos = {};
+
+  function defaultSection() {
+    const undone = GAMES.some(g => g.daily && !Arcade.dailyResult(g.daily));
+    return undone ? 'daily' : 'arcade';
+  }
+
+  function show(id) {
+    current = id;
+    query = '';
+    $('q').value = '';
+    store('hubSection', id);
+    tabs.forEach((t, i) => {
+      const on = SECTIONS[i].id === id;
+      t.setAttribute('aria-selected', on);
+      t.tabIndex = on ? 0 : -1;
+    });
+    $('about').textContent = SECTIONS.find(s => s.id === id).about;
+    render(GAMES.filter(g => g.s === id));
+  }
+
+  function search(text) {
+    query = text.trim().toLowerCase();
+    if (!query) return show(current);
+    tabs.forEach(t => t.setAttribute('aria-selected', false));
+    const hits = GAMES.filter(g => !g.daily && (g.title + ' ' + g.blurb + ' ' + SECTIONS.find(s => s.id === g.s).name).toLowerCase().includes(query));
+    $('about').textContent = hits.length
+      ? `${hits.length} ${hits.length === 1 ? 'game matches' : 'games match'} your search. Press ↓ to move into the results.`
+      : 'No games match that search. Try a different word, or clear the search to browse by section.';
+    render(hits);
+  }
+
+  function render(list) {
+    shown = list;
+    $('list').innerHTML = '';
+    items = list.map(g => {
+      const li = document.createElement('li');
+      const a = document.createElement('a');
+      a.className = 'item';
+      a.href = g.file;
+      a.tabIndex = -1;
+      a.style.setProperty('--c', g.color);
+      a.innerHTML = '<span class="sw" aria-hidden="true"></span><span class="t"></span><span class="s"></span><span class="d"></span>';
+      a.querySelector('.t').textContent = g.title;
+      a.querySelector('.s').textContent = status(g).short;
+      a.querySelector('.d').textContent = g.blurb;
+      a.addEventListener('focus', () => select(a));
+      a.addEventListener('mouseenter', () => preview(g));
+      a.addEventListener('mouseleave', () => { const f = items.find(x => x.tabIndex === 0); if (f) preview(shown[items.indexOf(f)]); });
+      li.append(a);
+      $('list').append(li);
+      return a;
+    });
+    const start = query ? 0 : Math.min(pos[current] || 0, items.length - 1);
+    if (items.length) { items[start].tabIndex = 0; preview(list[start]); }
+    else preview(null);
+  }
+
+  function select(a) {
+    items.forEach(x => { x.tabIndex = -1; x.classList.remove('current'); });
+    a.tabIndex = 0;
+    const i = items.indexOf(a);
+    if (!query) { pos[current] = i; store('hubPos', `${current}:${i}`); }
+    preview(shown[i]);
+  }
+
+  function preview(g) {
+    const p = $('preview');
+    if (!g) { p.innerHTML = ''; p.style.removeProperty('--c'); return; }
+    p.style.setProperty('--c', g.color);
+    const sec = SECTIONS.find(s => s.id === g.s).name;
+    p.innerHTML = `<p class="sec"></p><h2></h2><p class="blurb"></p><p class="stat">${status(g).long}</p>
+      <p class="play">Press <kbd>Enter</kbd> to play.</p>`;
+    // The section name only adds information in search results; while browsing, the tab already says it.
+    if (query) p.querySelector('.sec').textContent = sec; else p.querySelector('.sec').remove();
+    p.querySelector('h2').textContent = g.title;
+    p.querySelector('.blurb').textContent = g.blurb;
+  }
+
+  function focusItem(i) {
+    if (!items.length) return;
+    items[Math.max(0, Math.min(i, items.length - 1))].focus();
+  }
+  const idx = () => Math.max(0, items.indexOf(document.activeElement) >= 0 ? items.indexOf(document.activeElement) : items.findIndex(x => x.tabIndex === 0));
+
+  // Restore where the player was when they come back from a game.
+  const saved = (store('hubPos') || '').split(':');
+  if (saved[0]) pos[saved[0]] = Number(saved[1]) || 0;
+  show(current);
+  focusItem(pos[current] || 0);
+
+  const q = $('q');
+  q.addEventListener('input', () => search(q.value));
+  q.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); focusItem(0); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (items[0]) items[0].click(); }
+    else if (e.key === 'Escape') { e.preventDefault(); q.value = ''; show(current); focusItem(pos[current] || 0); }
+  });
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.target === q) return;
+    const si = SECTIONS.findIndex(s => s.id === current);
+    if (e.key === '/') { e.preventDefault(); q.focus(); return; }
+    if (/^[1-9]$/.test(e.key) && SECTIONS[e.key - 1]) { e.preventDefault(); show(SECTIONS[e.key - 1].id); focusItem(pos[current] || 0); return; }
+    switch (e.key) {
+      case 'ArrowDown': e.preventDefault(); focusItem(idx() + 1); break;
+      case 'ArrowUp':
+        e.preventDefault();
+        if (query && idx() === 0) q.focus(); else focusItem(idx() - 1);
+        break;
+      case 'ArrowRight': case 'ArrowLeft': {
+        e.preventDefault();
+        const next = (si + (e.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length;
+        show(SECTIONS[next].id);
+        focusItem(pos[current] || 0);
+        break;
+      }
+      case 'Home': e.preventDefault(); focusItem(0); break;
+      case 'End': e.preventDefault(); focusItem(items.length - 1); break;
+      case ' ': if (items.includes(document.activeElement)) { e.preventDefault(); document.activeElement.click(); } break;
+    }
+  });
+})();
+</script>

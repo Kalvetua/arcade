@@ -1,0 +1,333 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Mental Math Sprint</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: meta line, one big step display, answer row, feedback, and the worked chain after each answer. */
+  :root { --accent: #a0e75a; }
+  h1 { color: var(--accent); }
+  .meta {
+    display: flex; justify-content: space-between; margin-bottom: 14px;
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .stage {
+    display: grid; place-items: center; min-height: 128px;
+    background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    margin-bottom: 16px;
+  }
+  .step {
+    font-family: var(--display); font-weight: 400; color: var(--accent);
+    font-size: clamp(2.4rem, 12vw, 3.6rem); line-height: 1; font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .step.pop { animation: pop 220ms ease-out; }
+  .step.wait { color: var(--muted); font-size: clamp(1.6rem, 8vw, 2.2rem); }
+  @keyframes pop { from { transform: scale(0.82); opacity: 0.2; } to { transform: none; opacity: 1; } }
+  .dots { display: flex; gap: 6px; justify-content: center; margin: -6px 0 16px; }
+  .dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--grid); }
+  .dots i.done { background: var(--accent); }
+  .answer { display: flex; gap: 8px; }
+  .answer input {
+    flex: 1; min-width: 0;
+    font: 600 1.3rem var(--mono); font-variant-numeric: tabular-nums;
+    color: var(--ink); background: var(--ground);
+    border: 0; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    padding: 10px 12px;
+  }
+  .answer input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .answer input::placeholder { color: var(--muted); }
+  .answer button:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  .fb { min-height: 1.5em; margin: 12px 0 0; line-height: 1.5; font-size: 0.88rem; color: var(--muted); }
+  .fb.good { color: var(--good); }
+  .fb.bad { color: var(--danger); }
+  .fb b { color: var(--ink); }
+  .chain {
+    list-style: none; margin: 12px 0 0; padding: 0;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .chain li {
+    background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    padding: 6px 8px; font-size: 0.85rem; display: flex; justify-content: space-between; gap: 8px;
+  }
+  .chain .op { color: var(--accent); font-weight: 600; }
+  .chain .tot { color: var(--muted); }
+  .chain li.last { box-shadow: inset 0 0 0 2px var(--accent); }
+  .chain li.last .tot { color: var(--ink); font-weight: 600; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) { .step.pop { animation: none; } }
+</style>
+
+<div class="cab">
+  <h1>Mental Math Sprint</h1>
+  <p class="rule">A starting number appears, followed by a chain of operations shown one at a time. Keep the running total in your head and type the final result. Longer chains at higher levels are worth more points.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="lvl">Level 1</span><span id="prog">Get ready</span></div>
+    <div class="stage"><div class="step wait" id="step" aria-live="polite" aria-atomic="true">Ready</div></div>
+    <div class="dots" id="dots" aria-hidden="true"></div>
+    <div class="answer">
+      <label for="ans" class="sr">Your answer: the final result of the chain</label>
+      <input id="ans" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="Final result">
+      <button id="check" type="button">Check answer</button>
+      <button id="next" type="button" hidden>Next chain</button>
+    </div>
+    <p class="fb" id="fb" aria-live="polite"></p>
+    <ol class="chain" id="chain" aria-label="The full chain with the running total after each step" hidden></ol>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Watch the numbers and operations go by, keeping a running total in your head, then type the final result and press Enter. You have three lives.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Type your answer at any time, using <kbd>-</kbd> for negative numbers, and press <kbd>Enter</kbd> once the chain has finished to check it or to move on to the next chain. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+// GEN-START
+// Chain generator. Pure: takes a level and a random source and returns
+// { start, ops: [{ op, n, total }], answer }. Every running total is an integer within ±LIMIT.
+const LIMIT = 9999;
+const chainLength = level => Math.min(10, 3 + Math.floor((level - 1) / 2));
+const stepMs = level => Math.max(900, 2000 - 90 * (level - 1));
+
+function makeChain(level, rand) {
+  const int = (a, b) => a + Math.floor(rand() * (b - a + 1));
+  const steps = chainLength(level);
+  const addMax = Math.min(99, 9 + 4 * (level - 1));
+  const mulMax = Math.min(12, 3 + Math.floor(level / 2));
+  const divMax = Math.max(mulMax, 9);
+  const cap = Math.min(LIMIT, 50 + 50 * level);
+  const allowNeg = level >= 6;
+  const ok = v => Number.isInteger(v) && Math.abs(v) <= cap && (allowNeg || v >= 0);
+
+  let v = int(2, Math.min(50, 9 + 3 * (level - 1)));
+  const start = v, ops = [];
+  for (let i = 0; i < steps; i++) {
+    const cands = [];
+    const a = int(1, addMax);
+    if (ok(v + a)) cands.push({ op: '+', n: a });
+    const sMax = allowNeg ? addMax : Math.min(addMax, v);
+    if (sMax >= 1) { const b = int(1, sMax); if (ok(v - b)) cands.push({ op: '-', n: b }); }
+    // Never let a step simply undo the one before it (× 8 followed by ÷ 8).
+    const last = ops.length ? ops[ops.length - 1] : null;
+    const undoes = (op, n) => last && last.n === n && last.op === op;
+    if (v !== 0) {
+      const ms = [];
+      for (let m = 2; m <= mulMax; m++) if (ok(v * m) && !undoes('/', m)) ms.push(m);
+      if (ms.length) cands.push({ op: '*', n: ms[int(0, ms.length - 1)] });
+      const ds = [];
+      for (let d = 2; d <= divMax; d++) if (v % d === 0 && ok(v / d) && !undoes('*', d)) ds.push(d);
+      if (ds.length) cands.push({ op: '/', n: ds[int(0, ds.length - 1)] });
+    }
+    // Prefer a different kind of operation from the previous step, for variety.
+    const fresh = cands.filter(c => !last || c.op !== last.op);
+    const pool = fresh.length ? fresh : cands;
+    // Subtraction down to zero is always possible at low levels, and at high levels so is either + or -.
+    const c = pool.length ? pool[int(0, pool.length - 1)] : { op: '+', n: 1 };
+    v = c.op === '+' ? v + c.n : c.op === '-' ? v - c.n : c.op === '*' ? v * c.n : v / c.n;
+    ops.push({ op: c.op, n: c.n, total: v });
+  }
+  return { start, ops, answer: v };
+}
+// GEN-END
+
+  const LIVES = 3, BEST_KEY = 'mentalMathBest', GAP = 180;
+  const $ = id => document.getElementById(id);
+  const SYM = { '+': '+', '-': '−', '*': '×', '/': '÷' };
+  const SAY = { '+': 'plus', '-': 'minus', '*': 'times', '/': 'divided by' };
+  const fmt = n => (n < 0 ? '−' : '') + Math.abs(n).toLocaleString('en-US');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const s = { state: 'ready', score: 0, level: 1, lives: LIVES, chain: null, idx: 0, timer: 0, prevBest: 0 };
+
+  $('best').textContent = Arcade.best(BEST_KEY).toLocaleString('en-US');
+
+  function hud() {
+    $('score').textContent = s.score.toLocaleString('en-US');
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', `${s.lives} ${s.lives === 1 ? 'life' : 'lives'}`);
+    $('lvl').textContent = `Level ${s.level}`;
+  }
+
+  function show(text, label, wait) {
+    const el = $('step');
+    el.className = 'step' + (wait ? ' wait' : '');
+    el.textContent = text;
+    el.setAttribute('aria-label', label || text);
+    if (!wait && !reduced) { void el.offsetWidth; el.classList.add('pop'); }
+  }
+
+  function dots(done) {
+    const total = s.chain ? s.chain.ops.length + 1 : 0;
+    $('dots').replaceChildren(...Array.from({ length: total }, (_, i) => {
+      const d = document.createElement('i');
+      if (i < done) d.className = 'done';
+      return d;
+    }));
+  }
+
+  // Item 0 is the starting number; items 1..n are the operations.
+  function showItem() {
+    const c = s.chain, n = c.ops.length;
+    if (s.idx === 0) show(fmt(c.start), `Start with ${fmt(c.start)}`);
+    else {
+      const o = c.ops[s.idx - 1];
+      show(`${SYM[o.op]} ${o.n}`, `${SAY[o.op]} ${o.n}`);
+    }
+    $('prog').textContent = s.idx === 0 ? 'Starting number' : `Step ${s.idx} of ${n}`;
+    dots(s.idx + 1);
+    s.timer = setTimeout(() => {
+      s.idx++;
+      if (s.idx > n) return askAnswer();
+      show('', ' ', true);
+      s.timer = setTimeout(showItem, GAP);
+    }, stepMs(s.level));
+  }
+
+  function askAnswer() {
+    s.state = 'answer';
+    show('= ?', 'What is the final result?', true);
+    $('prog').textContent = 'Your answer';
+    const fb = $('fb');
+    fb.className = 'fb';
+    fb.textContent = 'The chain is done. Type the final result and press Enter.';
+    $('ans').focus();
+  }
+
+  function play() {
+    clearTimeout(s.timer);
+    s.chain = makeChain(s.level, Math.random);
+    s.state = 'chain';
+    s.idx = 0;
+    hud();
+    const ans = $('ans');
+    ans.value = ''; ans.readOnly = false;
+    $('check').hidden = false; $('next').hidden = true;
+    $('chain').hidden = true;
+    $('fb').className = 'fb';
+    $('fb').textContent = `Here comes a chain of ${s.chain.ops.length} steps.`;
+    ans.focus();
+    showItem();
+  }
+
+  function start() {
+    if (s.state !== 'ready' && s.state !== 'over') return;
+    clearTimeout(s.timer);
+    Object.assign(s, { score: 0, level: 1, lives: LIVES, prevBest: Arcade.best(BEST_KEY) });
+    $('ov').hidden = true;
+    play();
+  }
+
+  function renderChain() {
+    const c = s.chain, list = $('chain');
+    const li = (op, tot, last) => {
+      const el = document.createElement('li');
+      if (last) el.className = 'last';
+      const a = document.createElement('span'); a.className = 'op'; a.textContent = op;
+      const b = document.createElement('span'); b.className = 'tot'; b.textContent = tot;
+      el.append(a, b);
+      return el;
+    };
+    list.replaceChildren(
+      li('Start', fmt(c.start)),
+      ...c.ops.map((o, i) => li(`${SYM[o.op]} ${o.n}`, `= ${fmt(o.total)}`, i === c.ops.length - 1)),
+    );
+    list.hidden = false;
+  }
+
+  function check() {
+    const raw = $('ans').value.trim();
+    if (!/^-?\d+$/.test(raw)) {
+      $('fb').className = 'fb';
+      $('fb').textContent = 'Please type a whole number first.';
+      $('ans').focus();
+      return;
+    }
+    const c = s.chain, fb = $('fb');
+    s.state = 'reveal';
+    renderChain();
+    $('ans').readOnly = true;
+    $('check').hidden = true;
+    $('next').hidden = false;
+    if (Number(raw) === c.answer) {
+      const pts = c.ops.length * 5 * (s.level + 1);
+      s.score += pts;
+      s.level++;
+      hud();
+      show(fmt(c.answer), `The answer was ${fmt(c.answer)}`);
+      fb.className = 'fb good';
+      fb.textContent = `Correct! +${pts.toLocaleString('en-US')} points. On to level ${s.level}.`;
+      $('next').textContent = 'Next chain';
+    } else {
+      s.lives--;
+      hud();
+      show(fmt(c.answer), `The answer was ${fmt(c.answer)}`);
+      fb.className = 'fb bad';
+      const left = s.lives ? ` You have ${s.lives} ${s.lives === 1 ? 'life' : 'lives'} left.` : ' That was your last life.';
+      fb.innerHTML = `Not quite. The answer was <b>${fmt(c.answer)}</b>. The running total after each step is shown below.${left}`;
+      $('next').textContent = s.lives ? 'Next chain' : 'See your score';
+    }
+    $('next').focus();
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives > 0) return play();
+    s.state = 'over';
+    const best = Arcade.record(BEST_KEY, s.score);
+    $('best').textContent = best.toLocaleString('en-US');
+    const pts = `${s.score.toLocaleString('en-US')} ${s.score === 1 ? 'point' : 'points'}`;
+    const verdict = s.score > s.prevBest ? ' That’s a new best!' : (best ? ` Your best is ${best.toLocaleString('en-US')}.` : '');
+    $('ovt').textContent = 'Game over';
+    $('ovp').textContent = `You scored ${pts} and reached level ${s.level}.${verdict}`;
+    $('go').textContent = 'Play again';
+    $('ov').hidden = false;
+    $('go').focus();
+  }
+
+  // Keep only digits and a leading minus sign.
+  $('ans').addEventListener('input', e => {
+    const v = e.target.value, neg = /^\s*[-−]/.test(v);
+    const clean = (neg ? '-' : '') + v.replace(/\D/g, '');
+    if (clean !== v) e.target.value = clean;
+  });
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === 'Enter') {
+      if (e.target.closest('a')) return;
+      e.preventDefault();
+      if (e.repeat) return;
+      if (s.state === 'ready' || s.state === 'over') start();
+      else if (s.state === 'chain') { $('fb').className = 'fb'; $('fb').textContent = 'Wait for the chain to finish, then press Enter to check your answer.'; }
+      else if (s.state === 'answer') check();
+      else if (s.state === 'reveal') advance();
+    } else if ((s.state === 'chain' || s.state === 'answer') && /^[-0-9]$/.test(e.key) && document.activeElement !== $('ans')) {
+      $('ans').focus();
+    }
+  });
+  $('go').addEventListener('click', start);
+  $('check').addEventListener('click', () => {
+    if (s.state === 'answer') check();
+    else if (s.state === 'chain') { $('fb').className = 'fb'; $('fb').textContent = 'Wait for the chain to finish, then check your answer.'; $('ans').focus(); }
+  });
+  $('next').addEventListener('click', advance);
+
+  hud();
+  $('go').focus();
+})();
+</script>

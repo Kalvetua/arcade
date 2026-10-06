@@ -1,0 +1,458 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Before or After</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: a vertical timeline (oldest at top) with the new card sitting in the insertion slot. */
+  :root { --accent: #f4b860; }
+  h1 { color: var(--accent); }
+  h1 .date { display: block; margin-top: 8px; font: 600 0.85rem var(--mono); color: var(--muted); letter-spacing: 0; }
+  .panel { min-height: 400px; }
+  .hint { margin: 0 0 12px; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+  .line {
+    list-style: none; margin: 0; padding: 4px 4px 4px 0; max-height: 52vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .ev {
+    display: flex; gap: 12px; align-items: center;
+    background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    padding: 10px 12px; line-height: 1.35; font-size: 0.88rem;
+  }
+  .ev .y {
+    flex: none; min-width: 5.2em; text-align: right;
+    font-weight: 600; font-variant-numeric: tabular-nums; color: var(--accent);
+  }
+  .ev.good { box-shadow: inset 0 0 0 2px var(--good); }
+  .ev.good .y { color: var(--good); }
+  .ev.bad { box-shadow: inset 0 0 0 2px var(--danger); }
+  .ev.bad .y { color: var(--danger); }
+  .ev.new {
+    background: color-mix(in srgb, var(--accent) 16%, var(--ground));
+    box-shadow: inset 0 0 0 2px var(--accent);
+    outline: 3px solid var(--accent); outline-offset: 2px;
+    margin-block: 4px; cursor: default;
+  }
+  .ev.new .y { color: var(--ink); }
+  .ev.new:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .ctl { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .ctl button { font-size: 0.8rem; padding: 8px 12px; }
+  .ctl .ghost { flex: 1 1 0; }
+  .ctl #place { flex: 2 1 0; }
+  .fb { min-height: 3em; margin: 12px 0 0; line-height: 1.5; font-size: 0.88rem; color: var(--muted); }
+  .fb.good { color: var(--good); }
+  .fb.bad { color: var(--danger); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (prefers-reduced-motion: no-preference) {
+    .ev.good, .ev.bad { animation: pop 300ms ease; }
+    @keyframes pop { from { transform: scale(0.97); } to { transform: none; } }
+  }
+</style>
+
+<div class="cab">
+  <h1 id="title">Before or After</h1>
+  <p class="rule" id="rule">Place each historical event where it belongs on the timeline, with the oldest event at the top. You score a point for every event you place correctly, and the game ends after three mistakes.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k" id="midk">Best</span><span class="v" id="mid">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <p class="hint">Move the highlighted card to the spot where it belongs, then place it.</p>
+    <ol class="line" id="line" aria-label="Timeline, oldest event first"></ol>
+    <div class="ctl">
+      <button class="ghost" id="up" type="button" tabindex="-1" aria-label="Move the card earlier">↑ Earlier</button>
+      <button class="ghost" id="down" type="button" tabindex="-1" aria-label="Move the card later">↓ Later</button>
+      <button id="place" type="button" tabindex="-1">Place it here</button>
+    </div>
+    <p class="fb" id="fb" aria-live="polite"></p>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Each new event appears in the timeline without its year. Move it up or down with the arrow keys and press Enter to place it.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="sr" id="live" aria-live="polite"></p>
+  <p class="keys">Press <kbd>↑</kbd> and <kbd>↓</kbd> to move the new card, <kbd>Home</kbd> and <kbd>End</kbd> to jump to the top or bottom, and <kbd>Enter</kbd> or <kbd>Space</kbd> to place it. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  // [phrase used mid-sentence, year (negative means BC), plural?]
+  // Every phrase must read correctly in "<Phrase> was in <year>."
+  const EVENTS = [
+    ['the Battle of Marathon', -490],
+    ['the assassination of Julius Caesar', -44],
+    ['the eruption of Mount Vesuvius that buried Pompeii', 79],
+    ['the crowning of Charlemagne as emperor', 800],
+    ['the Battle of Hastings', 1066],
+    ['the sealing of the Magna Carta', 1215],
+    ['the fall of Constantinople to the Ottoman Empire', 1453],
+    ['Columbus’s first voyage to the Americas', 1492],
+    ['the publication of Martin Luther’s Ninety-five Theses', 1517],
+    ['the departure of Magellan’s expedition around the world', 1519],
+    ['the publication of Copernicus’s book placing the Sun at the center', 1543],
+    ['the defeat of the Spanish Armada', 1588],
+    ['Galileo’s discovery of the four largest moons of Jupiter', 1610],
+    ['the arrival of the Mayflower at Plymouth', 1620],
+    ['the Great Fire of London', 1666],
+    ['the publication of Isaac Newton’s Principia', 1687],
+    ['James Watt’s patent for his improved steam engine', 1769],
+    ['the signing of the US Declaration of Independence', 1776],
+    ['the storming of the Bastille', 1789],
+    ['Edward Jenner’s first smallpox vaccination', 1796],
+    ['the Louisiana Purchase', 1803],
+    ['the crowning of Napoleon as emperor of the French', 1804],
+    ['the publication of Pride and Prejudice', 1813],
+    ['the Battle of Waterloo', 1815],
+    ['the premiere of Beethoven’s Ninth Symphony', 1824],
+    ['Samuel Morse’s first long-distance telegraph message', 1844],
+    ['the discovery of gold at Sutter’s Mill in California', 1848],
+    ['the publication of Darwin’s On the Origin of Species', 1859],
+    ['the start of the American Civil War', 1861],
+    ['the Battle of Gettysburg', 1863],
+    ['the assassination of Abraham Lincoln', 1865],
+    ['the opening of the Suez Canal', 1869],
+    ['the patenting of the telephone by Alexander Graham Bell', 1876],
+    ['the first Wimbledon Championships', 1877, true],
+    ['the demonstration of Thomas Edison’s light bulb', 1879],
+    ['Karl Benz’s patent for his motor car', 1886],
+    ['the publication of the first Sherlock Holmes story', 1887],
+    ['the completion of the Eiffel Tower', 1889],
+    ['Wilhelm Röntgen’s discovery of X-rays', 1895],
+    ['the opening of the first modern Olympic Games in Athens', 1896],
+    ['the awarding of the first Nobel Prizes', 1901],
+    ['the Wright brothers’ first powered flight', 1903],
+    ['Einstein’s publication of the theory of special relativity', 1905],
+    ['the introduction of the Ford Model T', 1908],
+    ['the sinking of the Titanic', 1912],
+    ['the start of World War I', 1914],
+    ['the October Revolution in Russia', 1917],
+    ['the end of World War I', 1918],
+    ['the signing of the Treaty of Versailles', 1919],
+    ['the ratification of the 19th Amendment, giving American women the right to vote', 1920],
+    ['Charles Lindbergh’s solo nonstop flight across the Atlantic', 1927],
+    ['Alexander Fleming’s discovery of penicillin', 1928],
+    ['the Wall Street Crash', 1929],
+    ['the first FIFA World Cup', 1930],
+    ['the completion of the Empire State Building', 1931],
+    ['Amelia Earhart’s solo flight across the Atlantic', 1932],
+    ['Jesse Owens’s four gold medals at the Berlin Olympics', 1936, true],
+    ['the opening of the Golden Gate Bridge', 1937],
+    ['the start of World War II', 1939],
+    ['the attack on Pearl Harbor', 1941],
+    ['the D-Day invasion of Normandy', 1944],
+    ['the end of World War II', 1945],
+    ['the independence of India', 1947],
+    ['the founding of the People’s Republic of China', 1949],
+    ['the first ascent of Mount Everest', 1953],
+    ['Roger Bannister’s first mile run in under four minutes', 1954],
+    ['the opening of Disneyland', 1955],
+    ['the launch of Sputnik 1', 1957],
+    ['Yuri Gagarin’s flight as the first person in space', 1961],
+    ['the Cuban Missile Crisis', 1962],
+    ['the assassination of John F. Kennedy', 1963],
+    ['the Beatles’ first appearance on The Ed Sullivan Show', 1964],
+    ['the first Super Bowl', 1967],
+    ['the first Moon landing', 1969],
+    ['the Apollo 13 mission', 1970],
+    ['Ray Tomlinson’s first networked email', 1971],
+    ['the opening of the Sydney Opera House', 1973],
+    ['the founding of Microsoft', 1975],
+    ['the landing of Viking 1 on Mars', 1976],
+    ['the release of the first Star Wars film', 1977],
+    ['the birth of Louise Brown, the first baby conceived through IVF', 1978],
+    ['the release of Pac-Man', 1980],
+    ['the first launch of a Space Shuttle', 1981],
+    ['the release of Michael Jackson’s album Thriller', 1982],
+    ['the launch of the Apple Macintosh', 1984],
+    ['the release of Super Mario Bros. for the NES', 1985],
+    ['the Chernobyl nuclear disaster', 1986],
+    ['the first Rugby World Cup', 1987],
+    ['the fall of the Berlin Wall', 1989],
+    ['the launch of the Hubble Space Telescope', 1990],
+    ['the dissolution of the Soviet Union', 1991],
+    ['the sending of the first text message', 1992],
+    ['the opening of the Channel Tunnel', 1994],
+    ['the release of Toy Story, the first fully computer-animated feature film', 1995],
+    ['the birth of Dolly the sheep', 1996],
+    ['the publication of the first Harry Potter book', 1997],
+    ['the founding of Google', 1998],
+    ['the Sydney Summer Olympics', 2000, true],
+    ['the launch of Wikipedia', 2001],
+    ['the introduction of euro coins and banknotes', 2002],
+    ['the completion of the Human Genome Project', 2003],
+    ['the Indian Ocean earthquake and tsunami', 2004],
+    ['the launch of YouTube', 2005],
+    ['the reclassification of Pluto as a dwarf planet', 2006],
+    ['the release of the first iPhone', 2007],
+    ['the Beijing Summer Olympics', 2008, true],
+    ['Usain Bolt’s 100-meter world record of 9.58 seconds', 2009],
+    ['the release of the first iPad', 2010],
+    ['the full release of Minecraft', 2011],
+    ['the landing of the Curiosity rover on Mars', 2012],
+    ['the New Horizons flyby of Pluto', 2015],
+    ['the Brexit referendum in the United Kingdom', 2016],
+    ['the release of the first image of a black hole', 2019],
+    ['the launch of the James Webb Space Telescope', 2021],
+    ['the public release of ChatGPT', 2022],
+    // Same-year companions; never two in one game (decks keep one event per year).
+    ['the founding of Apple', 1976],
+    ['the founding of Amazon', 1994],
+    ['the launch of Facebook', 2004],
+    ['the launch of the first module of the International Space Station', 1998],
+    ['the founding of the United Nations', 1945],
+    ['the Woodstock music festival', 1969],
+    ['Tim Berners-Lee’s proposal for the World Wide Web', 1989],
+    ['Valentina Tereshkova’s flight as the first woman in space', 1963],
+    ['the coronation of Queen Elizabeth II', 1953],
+    ['the release of Windows 95', 1995],
+    ['the launch of Voyager 1', 1977],
+    ['the release of Steamboat Willie, starring Mickey Mouse', 1928],
+    ['the first human heart transplant', 1967],
+    ['the release of the first Pokémon games in Japan', 1996, true],
+    ['the release of Snow White and the Seven Dwarfs', 1937],
+    ['the Hindenburg disaster', 1937],
+    ['the launch of Twitter', 2006],
+    ['the publication of the Bitcoin white paper', 2008],
+    ['the announcement of the discovery of the Higgs boson', 2012],
+    ['the invention of the transistor at Bell Labs', 1947],
+    ['the first Tour de France', 1903],
+    ['the release of the IBM Personal Computer', 1981],
+    ['the release of The Jazz Singer, the first feature-length talking film', 1927],
+    ['the dedication of the Statue of Liberty', 1886],
+    ['the opening of the Panama Canal', 1914],
+    ['the founding of Netflix', 1997],
+    ['the creation of Tetris', 1984],
+    ['the Space Shuttle Challenger disaster', 1986],
+    ['the reunification of Germany', 1990],
+    ['the election of Nelson Mandela as president of South Africa', 1994],
+    ['the September 11 attacks', 2001, true],
+    ['the publication of Dmitri Mendeleev’s periodic table', 1869],
+  ].map(([phrase, year, plural]) => ({ phrase, year, plural: !!plural }));
+
+  const LIVES = 3, KEY = 'beforeAfterBest', DAILY_COUNT = 10;
+  const $ = id => document.getElementById(id);
+  const cap = t => t[0].toUpperCase() + t.slice(1);
+  const fmtYear = y => (y < 0 ? `${-y} BC` : y < 1000 ? `AD ${y}` : String(y));
+  const was = e => `${cap(e.phrase)} ${e.plural ? 'were' : 'was'} in ${fmtYear(e.year)}.`;
+  const short = e => `${e.phrase} (${fmtYear(e.year)})`;
+  const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+  const daily = Arcade.daily('before-after');
+  const rand = daily ? daily.rng : Math.random;
+
+  // Shuffle, then keep only the first event for each year so no two events in a game share a year.
+  function makeDeck() {
+    const seen = new Set();
+    return Arcade.shuffle(EVENTS, rand).filter(e => !seen.has(e.year) && seen.add(e.year));
+  }
+  // The daily deck is fixed for the day: a starting event plus ten to place.
+  const dailyDeck = daily ? makeDeck().slice(0, DAILY_COUNT + 1) : null;
+
+  const s = { state: 'ready', placed: [], deck: [], card: null, slot: 0, score: 0, lives: LIVES, done: 0, mark: null };
+
+  function hud() {
+    $('score').textContent = s.score;
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', plural(s.lives, 'life', 'lives'));
+    if (daily && daily.result && s.state !== 'play') {
+      $('midk').textContent = 'Today';
+      $('mid').textContent = `${daily.result.score} of ${daily.result.total}`;
+    } else if (daily) $('mid').textContent = `${Math.min(s.done + (s.card ? 1 : 0), DAILY_COUNT)} of ${DAILY_COUNT}`;
+    else $('mid').textContent = Arcade.best(KEY);
+  }
+
+  function where() {
+    const a = s.placed[s.slot - 1], b = s.placed[s.slot];
+    if (a && b) return `between ${short(a)} and ${short(b)}`;
+    if (b) return `before ${short(b)}, at the top`;
+    if (a) return `after ${short(a)}, at the bottom`;
+    return 'on the timeline';
+  }
+
+  function item(e, cls) {
+    const li = document.createElement('li');
+    li.className = 'ev' + (cls ? ' ' + cls : '');
+    const y = document.createElement('span');
+    y.className = 'y';
+    y.textContent = fmtYear(e.year);
+    const t = document.createElement('span');
+    t.textContent = cap(e.phrase);
+    li.append(y, t);
+    return li;
+  }
+
+  function render() {
+    const line = $('line'), els = [];
+    s.placed.forEach((e, i) => {
+      if (s.card && i === s.slot) els.push(cardEl());
+      els.push(item(e, s.mark === e ? s.markCls : ''));
+    });
+    if (s.card && s.slot === s.placed.length) els.push(cardEl());
+    line.replaceChildren(...els);
+    const c = line.querySelector('.new');
+    if (c) {
+      c.focus({ preventScroll: true });
+      c.scrollIntoView({ block: 'nearest' });
+    } else if (s.mark) {
+      const m = line.querySelector('.good, .bad');
+      if (m) m.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function cardEl() {
+    const li = item({ phrase: s.card.phrase, year: 0 }, 'new');
+    li.querySelector('.y').textContent = '????';
+    li.tabIndex = 0;
+    li.setAttribute('aria-label', `New event: ${cap(s.card.phrase)}. It is currently ${where()}. Use the up and down arrow keys to move it, and press Enter to place it.`);
+    li.addEventListener('click', () => li.focus());
+    return li;
+  }
+
+  function nextCard() {
+    s.card = s.deck.shift() || null;
+    if (!s.card) return end();
+    s.slot = Math.floor(s.placed.length / 2);
+    s.state = 'play';
+    hud();
+    render();
+  }
+
+  function start() {
+    s.deck = daily ? dailyDeck.slice() : makeDeck();
+    s.placed = [s.deck.shift()];
+    Object.assign(s, { score: 0, lives: LIVES, done: 0, mark: null, card: null });
+    $('fb').textContent = ''; $('fb').className = 'fb';
+    $('ov').hidden = true;
+    nextCard();
+    $('live').textContent = `The timeline starts with ${short(s.placed[0])}. Place ${s.card.phrase}.`;
+  }
+
+  function move(to) {
+    if (s.state !== 'play') return;
+    const n = Math.max(0, Math.min(s.placed.length, to));
+    if (n === s.slot) return;
+    s.slot = n;
+    render();
+    $('live').textContent = `The card is now ${where()}.`;
+  }
+
+  function place() {
+    if (s.state !== 'play') return;
+    const e = s.card, y = e.year;
+    const a = s.placed[s.slot - 1], b = s.placed[s.slot];
+    const ok = (!a || a.year < y) && (!b || b.year > y);
+    let at = s.placed.findIndex(p => p.year > y);
+    if (at < 0) at = s.placed.length;
+    s.placed.splice(at, 0, e);
+    s.card = null;
+    s.done++;
+    s.mark = e;
+    s.markCls = ok ? 'good' : 'bad';
+    const fb = $('fb');
+    if (ok) {
+      s.score++;
+      fb.className = 'fb good';
+      fb.textContent = `Correct! ${was(e)}`;
+    } else {
+      s.lives--;
+      const pa = s.placed[at - 1], pb = s.placed[at + 1];
+      const spot = pa && pb ? `between ${short(pa)} and ${short(pb)}` : pb ? `before ${short(pb)}` : `after ${short(pa)}`;
+      fb.className = 'fb bad';
+      fb.textContent = `Not quite. ${was(e)} It belongs ${spot}.`;
+    }
+    hud();
+    if (s.lives <= 0 || (daily && s.done >= DAILY_COUNT)) { render(); return end(); }
+    nextCard();
+  }
+
+  function dailyLine(r) {
+    return `You placed ${r.score} of ${r.total} events today.`;
+  }
+
+  function end() {
+    s.state = 'over';
+    s.card = null;
+    render();
+    hud();
+    let msg;
+    if (daily) {
+      const r = { score: s.score, total: DAILY_COUNT };
+      daily.finish(r);
+      daily.result = r;
+      $('ovt').textContent = s.lives > 0 ? 'Daily game complete' : 'Out of lives';
+      msg = `${dailyLine(r)} Come back tomorrow for a new set of events.`;
+      $('go').textContent = 'Play the regular game';
+    } else {
+      const before = Arcade.best(KEY), best = Arcade.record(KEY, s.score);
+      $('ovt').textContent = s.lives > 0 ? 'Deck complete' : 'Game over';
+      msg = `You placed ${plural(s.score, 'event', 'events')} correctly.` +
+        (s.score > before ? ' That’s a new best!' : best > 0 ? (best ? ` Your best is ${plural(best, 'event', 'events')}.` : '') : '');
+      if (s.lives > 0) msg = `You used every event in the deck. ${msg}`;
+      $('go').textContent = 'Play again';
+      hud();
+    }
+    $('ovp').textContent = msg;
+    $('live').textContent = `${$('fb').textContent} ${$('ovt').textContent}. ${msg}`;
+    $('ov').hidden = false;
+    $('go').focus();
+  }
+
+  function go() {
+    if (s.state === 'play') return;
+    if (daily && daily.result) { location.href = 'before-or-after.html'; return; }
+    start();
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target.closest && e.target.closest('a')) return;
+    const k = e.key;
+    if (s.state !== 'play') {
+      if (k === 'Enter' || k === ' ') { e.preventDefault(); if (!e.repeat) go(); }
+      return;
+    }
+    if (k === 'ArrowUp') { e.preventDefault(); move(s.slot - 1); }
+    else if (k === 'ArrowDown') { e.preventDefault(); move(s.slot + 1); }
+    else if (k === 'Home') { e.preventDefault(); move(0); }
+    else if (k === 'End') { e.preventDefault(); move(s.placed.length); }
+    else if (k === 'Enter' || k === ' ') { e.preventDefault(); if (!e.repeat) place(); }
+  });
+  $('go').addEventListener('click', go);
+  $('up').addEventListener('click', () => move(s.slot - 1));
+  $('down').addEventListener('click', () => move(s.slot + 1));
+  $('place').addEventListener('click', place);
+
+  // Daily mode: change the heading and overlay, and show today's result if it already exists.
+  if (daily) {
+    const when = new Date(`${daily.date}T00:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    document.title = 'Daily Before or After';
+    $('title').innerHTML = 'Daily Before or After <span class="date"></span>';
+    $('title').querySelector('.date').textContent = when;
+    $('rule').textContent = `This is the daily Before or After puzzle for ${when}. Place ten events in order, with the oldest at the top, and try to get them all right before you run out of three lives.`;
+    $('midk').textContent = 'Event';
+    if (daily.result) {
+      $('ovt').textContent = 'Already played today';
+      $('ovp').textContent = `${dailyLine(daily.result)} Come back tomorrow for a new set of events.`;
+      $('go').textContent = 'Play the regular game';
+    } else {
+      $('ovp').textContent = 'Everyone gets the same ten events today. Move each new event with the arrow keys and press Enter to place it. You have three lives.';
+    }
+  }
+
+  // Show a sample timeline behind the start overlay (never from the daily deck, so nothing is spoiled).
+  s.placed = Arcade.shuffle(EVENTS).slice(0, 4).sort((a, b) => a.year - b.year);
+  render();
+  hud();
+  s.placed = [];
+  $('go').focus();
+})();
+</script>

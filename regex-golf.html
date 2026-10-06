@@ -1,0 +1,309 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Regex Golf</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: cabinet with HUD, level strip, then a panel with the task, the regex input, status, and two word lists. */
+  :root { --accent: #ffcb6b; }
+  .cab { max-width: 760px; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 12px; min-height: 460px; }
+  .strip { display: flex; flex-wrap: wrap; gap: 6px; }
+  .strip button { min-width: 2.4em; padding: 4px 6px; font-size: 0.8rem; background: var(--ground); color: var(--ink); box-shadow: inset 0 0 0 1px var(--grid); }
+  .strip button.done { color: var(--good); box-shadow: inset 0 0 0 1px var(--good); }
+  .strip button.skipped { color: var(--muted); }
+  .strip button.cur { background: var(--accent); color: var(--ground); box-shadow: none; }
+  .strip button:disabled { opacity: 0.35; cursor: default; }
+  .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #task { margin: 0; font-size: 1.05rem; font-weight: 600; line-height: 1.45; }
+  .entry { display: flex; align-items: center; gap: 4px; background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); padding: 0 10px; }
+  .entry:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .entry span { color: var(--muted); }
+  #re { flex: 1; min-width: 0; font: 600 1.05rem var(--mono); color: var(--ink); background: transparent; border: 0; padding: 10px 2px; outline: none; }
+  #status { margin: 0; font-size: 0.8rem; color: var(--muted); min-height: 1.4em; }
+  #status.err { color: var(--danger); }
+  #fb { margin: 0; font-size: 0.85rem; line-height: 1.5; min-height: 1.5em; color: var(--muted); }
+  #fb.right { color: var(--good); }
+  #fb.hint { color: var(--accent); }
+  .lists { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 520px) { .lists { grid-template-columns: 1fr; } }
+  .lists h3 { margin: 0 0 6px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); font-weight: 600; }
+  .lists ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .lists li { font-size: 0.85rem; padding: 3px 8px; border-radius: 3px; background: var(--ground); box-shadow: inset 0 0 0 1px var(--grid); white-space: pre; }
+  .lists li b { font-weight: 600; margin-right: 6px; color: var(--muted); }
+  .lists li.ok { background: color-mix(in srgb, var(--good) 20%, var(--ground)); box-shadow: inset 0 0 0 1px var(--good); }
+  .lists li.ok b { color: var(--good); }
+  .lists li.bad { background: color-mix(in srgb, var(--danger) 20%, var(--ground)); box-shadow: inset 0 0 0 1px var(--danger); }
+  .lists li.bad b { color: var(--danger); }
+</style>
+
+<div class="cab">
+  <h1>Regex Golf</h1>
+  <p class="rule">Write a JavaScript regular expression that matches every word in the left list and none in the right list. Shorter patterns score more points, and beating par earns a bonus.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Level</span><span class="v" id="lvl">1</span></div>
+    <div class="stat"><span class="k">Total</span><span class="v" id="total">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="strip" id="strip" aria-label="Levels"></div>
+    <div class="meta"><span id="title">Level 1</span><span id="par"></span></div>
+    <p id="task">Your first level will appear here.</p>
+    <label class="entry"><span aria-hidden="true">/</span><input id="re" type="text" maxlength="80" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Your regular expression" aria-describedby="status"><span aria-hidden="true">/</span></label>
+    <p id="status"></p>
+    <p id="fb" aria-live="polite"></p>
+    <div class="lists">
+      <section><h3>Match all of these</h3><ul id="yes"></ul></section>
+      <section><h3>Match none of these</h3><ul id="no"></ul></section>
+    </div>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Type a pattern and watch each word turn green when it is handled correctly. Press Enter to submit once every word is right.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Type your pattern without slashes, or as <kbd>/pattern/flags</kbd> to use flags, and press <kbd>Enter</kbd> to submit it. Press <kbd>↑</kbd> in the input for a hint, <kbd>Enter</kbd> on an empty input to skip a level for zero points, and <kbd>PageUp</kbd> or <kbd>PageDown</kbd> to switch between unlocked levels. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  // LEVELS START
+  // Each level: title, task sentence, words to match, words to avoid, reference solution (its length is par), and a hint.
+  const LEVELS = [
+    { title: 'Getting started', task: 'Match every word that contains “ing”.',
+      yes: ['sing', 'boring', 'kingdom', 'ringing', 'ingot', 'linger', 'fingers'],
+      no: ['sign', 'grin', 'inner', 'niche', 'gin', 'align'],
+      ref: 'ing', hint: 'A plain run of letters matches anywhere in the word.' },
+    { title: 'Last letter', task: 'Match the words that end in x.',
+      yes: ['box', 'fox', 'relax', 'index', 'syntax', 'mix'],
+      no: ['boxer', 'taxi', 'xenon', 'exit', 'toxic', 'oxen'],
+      ref: 'x$', hint: 'The $ anchor matches the end of the word.' },
+    { title: 'Vowel first', task: 'Match the words that start with a vowel.',
+      yes: ['apple', 'egg', 'island', 'orange', 'umbrella', 'eagle', 'under'],
+      no: ['banana', 'tree', 'xylophone', 'spoon', 'crab', 'yellow'],
+      ref: '^[aeiou]', hint: 'Combine the ^ anchor with a character class such as [abc].' },
+    { title: 'Three letters', task: 'Match the words that are exactly three letters long.',
+      yes: ['cat', 'dog', 'sun', 'box', 'ice', 'arm'],
+      no: ['a', 'at', 'bird', 'house', 'ox', 'trees'],
+      ref: '^...$', hint: 'A dot matches any one character, and you can anchor both ends.' },
+    { title: 'Only digits', task: 'Match the strings made entirely of digits.',
+      yes: ['42', '7', '1000', '31337', '0', '2026'],
+      no: ['4two', '3.14', '-5', '1e9', 'abc', '12a'],
+      ref: '^\\d+$', hint: 'The class \\d matches one digit, and + repeats it.' },
+    { title: 'Seeing double', task: 'Match the words that contain the same letter twice in a row.',
+      yes: ['book', 'apple', 'coffee', 'balloon', 'letter', 'jazz', 'mississippi'],
+      no: ['bike', 'table', 'banana', 'river', 'kite', 'planet'],
+      ref: '(.)\\1', hint: 'Capture a character with parentheses and repeat it with the backreference \\1.' },
+    { title: 'Q without U', task: 'Match the words with a q that is not followed by a u.',
+      yes: ['qat', 'qi', 'qatar', 'qwerty', 'faqir', 'tranq', 'niqab'],
+      no: ['queen', 'quiet', 'equal', 'aqua', 'quartz', 'unique'],
+      ref: 'q(?!u)', hint: 'A negative lookahead (?!…) checks what must not come next.' },
+    { title: 'Bookends', task: 'Match the words that start and end with the same letter.',
+      yes: ['area', 'dad', 'eye', 'gang', 'noon', 'test', 'toast', 'kiosk'],
+      no: ['apple', 'cat', 'dog', 'team', 'bring', 'oxen'],
+      ref: '^(.).*\\1$', hint: 'Capture the first letter, skip anything with .*, and repeat the capture at the end.' },
+    { title: 'Palindromes', task: 'Match the five-letter words that read the same backward.',
+      yes: ['level', 'radar', 'civic', 'kayak', 'refer', 'madam', 'rotor', 'stats', 'tenet'],
+      no: ['hello', 'lever', 'metal', 'comic', 'robot', 'carts', 'tenor', 'ratio'],
+      ref: '^(.)(.).\\2\\1$', hint: 'Capture the first two letters, allow any middle letter, then repeat the captures in reverse order.' },
+    { title: 'Stutter', task: 'Match the phrases where a word is repeated right away.',
+      yes: ['the the', 'go go', 'bye bye', 'no no no', 'is it it', 'so so good'],
+      no: ['the then', 'go to', 'hi there', 'is it', 'then the', 'a cat'],
+      ref: '\\b(\\w+) \\1\\b', hint: 'Capture a whole word with \\b(\\w+), then look for a space and the same word followed by another \\b.' },
+    { title: 'Hex colors', task: 'Match the valid CSS hex colors with three or six digits.',
+      yes: ['#fff', '#000000', '#1a2B3c', '#ABC', '#c0ffee', '#09f'],
+      no: ['#ffff', 'fff', '#12345', '#ggg', '#12345g', '##abc'],
+      ref: '/^#([\\da-f]{3}){1,2}$/i', hint: 'A group of three hex digits repeated once or twice covers both lengths, and the i flag ignores case.' },
+    { title: 'Clock time', task: 'Match the valid 24-hour times written as HH:MM.',
+      yes: ['00:00', '09:30', '13:45', '23:59', '19:05', '20:20'],
+      no: ['24:00', '12:60', '9:30', '25:15', '23:5', '1234'],
+      ref: '^([01]\\d|2[0-3]):[0-5]\\d$', hint: 'Hours run from 00 to 19 or from 20 to 23, and minutes start with a digit from 0 to 5.' },
+    { title: 'No repeats', task: 'Match the words in which no letter appears twice.',
+      yes: ['dog', 'planet', 'trick', 'jumping', 'sky', 'frost', 'bright', 'cloudy'],
+      no: ['letter', 'banana', 'pepper', 'apple', 'little', 'sees', 'moon', 'aria'],
+      ref: '^(?!.*(.).*\\1)', hint: 'At the start, use a negative lookahead that rules out any character that shows up again later.' },
+    { title: 'Snake case', task: 'Match the lowercase snake_case identifiers.',
+      yes: ['user_id', 'max_value', 'x', 'is_ok', 'http2_port', 'a_b_c'],
+      no: ['UserId', '_private', 'trailing_', 'double__under', '2fast', 'camelCase'],
+      ref: '^[a-z][a-z\\d]*(_[a-z\\d]+)*$', hint: 'Start with a letter, then allow groups that each begin with one underscore followed by letters or digits.' },
+    { title: 'IPv4 octets', task: 'Match the numbers from 0 to 255 written without leading zeros.',
+      yes: ['0', '7', '42', '99', '100', '199', '200', '249', '250', '255', '5', '13', '64', '128', '172', '192', '224', '233', '254'],
+      no: ['256', '300', '260', '01', '007', '1000', '999', '-1', '25a'],
+      ref: '^([1-9]?\\d|1\\d\\d|2[0-4]\\d|25[0-5])$', hint: 'Split the range into 0 to 99, 100 to 199, 200 to 249, and 250 to 255.' },
+    { title: 'Divisible by 4', task: 'Match the numbers that are divisible by 4.',
+      yes: ['4', '8', '12', '16', '20', '24', '28', '32', '36', '44', '56', '64', '72', '88', '96', '100', '116', '132'],
+      no: ['2', '6', '10', '14', '18', '22', '26', '30', '34', '42', '50', '58', '66', '74', '90', '98', '102', '114', '5', '7'],
+      ref: '^[48]$|[02468][048]$|[13579][26]$', hint: 'Only the last two digits matter: an even tens digit pairs with 0, 4, or 8, and an odd tens digit pairs with 2 or 6.' },
+    { title: 'Even a’s', task: 'Match the strings of a and b that contain an even number of a’s.',
+      yes: ['bb', 'aa', 'abab', 'baab', 'bbbb', 'aabaab', 'b', 'aaaa'],
+      no: ['a', 'ab', 'ba', 'aaa', 'bab', 'abbb', 'aaab', 'babaa'],
+      ref: '^(b*ab*a)*b*$', hint: 'Think in pairs of a’s, with any number of b’s around them.' },
+    { title: 'Binary by 3', task: 'Match the binary numbers that are divisible by 3.',
+      yes: ['0', '11', '110', '1001', '1100', '1111', '10010', '10101'],
+      no: ['1', '10', '100', '101', '111', '1000', '1010', '1011'],
+      ref: '^(0|1(01*0)*1)*$', hint: 'Track the remainder as you read digits: a 1 leaves remainder zero, any run of 01*0 keeps you in the middle states, and another 1 brings you back.' },
+  ];
+  // LEVELS END
+
+  const $ = id => document.getElementById(id);
+  const KEY = 'regexGolfBest', PROG = 'regexGolfProgress';
+  // Bare pattern, or /pattern/flags. Length counts the pattern plus its flags, never the slashes.
+  function parse(inp) {
+    const m = /^\/(.+)\/([a-z]*)$/s.exec(inp);
+    return m ? { src: m[1], flags: m[2], len: m[1].length + m[2].length } : { src: inp, flags: '', len: inp.length };
+  }
+  const par = L => parse(L.ref).len;
+  const points = (len, p) => Math.max(10, p * 10 - (len - p) * 5);
+  const plural = (n, w) => `${n.toLocaleString('en-US')} ${n === 1 ? w : w + 's'}`;
+
+  let prog = { unlocked: 0, scores: {} };
+  try { const p = JSON.parse(localStorage.getItem(PROG)); if (p && typeof p.unlocked === 'number' && p.scores) prog = p; } catch {}
+  const save = () => { try { localStorage.setItem(PROG, JSON.stringify(prog)); } catch {} };
+  const total = () => Object.values(prog.scores).reduce((a, b) => a + b, 0);
+  let best = Arcade.record(KEY, total());
+
+  const s = { state: 'ready', i: 0, ok: false };
+  const input = $('re');
+
+  function hud() {
+    $('lvl').textContent = `${s.i + 1} of ${LEVELS.length}`;
+    $('total').textContent = total().toLocaleString('en-US');
+    best = Arcade.record(KEY, total());
+    $('best').textContent = best.toLocaleString('en-US');
+    const strip = $('strip');
+    strip.innerHTML = '';
+    LEVELS.forEach((L, i) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = i + 1; b.tabIndex = -1;
+      const sc = prog.scores[i];
+      b.className = (i === s.i ? 'cur ' : '') + (sc > 0 ? 'done' : sc === 0 ? 'skipped' : '');
+      b.disabled = i > prog.unlocked;
+      b.setAttribute('aria-label', `Level ${i + 1}, ${L.title}${i > prog.unlocked ? ', locked' : sc > 0 ? `, best ${plural(sc, 'point')}` : sc === 0 ? ', skipped' : ''}`);
+      b.addEventListener('click', () => { if (s.state !== 'ready' && s.state !== 'over') load(i); });
+      strip.append(b);
+    });
+  }
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function start() {
+    $('ov').hidden = true;
+    let i = LEVELS.findIndex((L, k) => k <= prog.unlocked && !(prog.scores[k] > 0));
+    if (i < 0) i = 0;
+    load(i);
+  }
+
+  function load(i) {
+    s.i = i; s.state = 'play';
+    const L = LEVELS[i];
+    $('title').textContent = `Level ${i + 1}: ${L.title}`;
+    const sc = prog.scores[i];
+    $('par').textContent = `Par ${par(L)}` + (sc > 0 ? `, your best ${plural(sc, 'point')}` : '');
+    $('task').textContent = L.task;
+    for (const [id, words] of [['yes', L.yes], ['no', L.no]]) {
+      const ul = $(id); ul.innerHTML = '';
+      for (const w of words) { const li = document.createElement('li'); li.innerHTML = '<b aria-hidden="true">·</b><span></span>'; li.lastChild.textContent = w; ul.append(li); }
+    }
+    input.value = '';
+    $('fb').textContent = ''; $('fb').className = '';
+    check();
+    hud();
+    input.focus();
+  }
+
+  function check() {
+    const L = LEVELS[s.i], v = input.value, st = $('status');
+    const items = [...$('yes').children, ...$('no').children];
+    const mark = (li, cls, sym) => { li.className = cls; li.firstChild.textContent = sym; };
+    s.ok = false;
+    st.className = '';
+    if (!v) { items.forEach(li => mark(li, '', '·')); st.textContent = `Par is ${par(L)}. Start typing a pattern.`; return; }
+    const p = parse(v);
+    let re;
+    try { re = new RegExp(p.src, p.flags); } catch {
+      items.forEach(li => mark(li, '', '·'));
+      st.className = 'err'; st.textContent = 'That pattern isn’t a valid regex yet.'; return;
+    }
+    const test = w => { re.lastIndex = 0; try { return re.test(w); } catch { return false; } };
+    let good = 0;
+    [...$('yes').children].forEach((li, k) => { const r = test(L.yes[k]); if (r) good++; mark(li, r ? 'ok' : 'bad', r ? '✓' : '✗'); li.setAttribute('aria-label', `${L.yes[k]}, ${r ? 'matched' : 'not matched yet'}`); });
+    [...$('no').children].forEach((li, k) => { const r = !test(L.no[k]); if (r) good++; mark(li, r ? 'ok' : 'bad', r ? '✓' : '✗'); li.setAttribute('aria-label', `${L.no[k]}, ${r ? 'correctly avoided' : 'wrongly matched'}`); });
+    const n = items.length;
+    s.ok = good === n;
+    st.textContent = `${good} of ${n} words are right. Your pattern is ${plural(p.len, 'character')} long, and par is ${par(L)}.` + (s.ok ? ' Press Enter to submit.' : '');
+  }
+
+  function submit() {
+    const L = LEVELS[s.i], v = input.value, fb = $('fb');
+    if (!v) return skip();
+    check();
+    if (!s.ok) { fb.className = ''; fb.textContent = $('status').className === 'err' ? 'That pattern isn’t a valid regex yet.' : 'Not every word is right yet. Fix the words marked with ✗ first.'; return; }
+    const len = parse(v).len, p = par(L), pts = points(len, p);
+    const prev = prog.scores[s.i];
+    if (!(prev >= pts)) prog.scores[s.i] = pts;
+    prog.unlocked = Math.max(prog.unlocked, Math.min(s.i + 1, LEVELS.length - 1));
+    save();
+    const cmp = len < p ? `${plural(p - len, 'character')} under par` : len > p ? `${plural(len - p, 'character')} over par` : 'exactly par';
+    const tail = prev > pts ? ` Your best on this level is still ${plural(prev, 'point')}.` : '';
+    fb.className = 'right';
+    fb.textContent = `Correct! +${plural(pts, 'point')}. Your pattern is ${plural(len, 'character')}, which is ${cmp}. One reference answer is ${L.ref}.${tail} Press Enter to continue.`;
+    s.state = 'solved';
+    hud();
+  }
+
+  function skip() {
+    if (!(prog.scores[s.i] >= 0)) prog.scores[s.i] = 0;
+    prog.unlocked = Math.max(prog.unlocked, Math.min(s.i + 1, LEVELS.length - 1));
+    save();
+    $('fb').className = '';
+    $('fb').textContent = `You skipped level ${s.i + 1} for zero points. One answer was ${LEVELS[s.i].ref}.`;
+    s.state = 'solved';
+    hud();
+  }
+
+  function advance() {
+    if (s.i + 1 < LEVELS.length) return load(s.i + 1);
+    s.state = 'over';
+    const t = total(), prevBest = best;
+    hud();
+    const solved = Object.values(prog.scores).filter(x => x > 0).length;
+    showOverlay('Course complete', `You reached the last hole with a total of ${plural(t, 'point')} across ${plural(solved, 'solved level')}. ${t > prevBest ? 'That’s a new best!' : (best ? `Your best is ${best.toLocaleString('en-US')}.` : '')} Play again to improve your scores.`, 'Play again');
+  }
+
+  input.addEventListener('input', () => { if (s.state === 'solved') s.state = 'play'; $('fb').textContent = ''; check(); });
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (s.state === 'ready' || s.state === 'over') {
+      if (e.key === 'Enter') { e.preventDefault(); start(); }
+      return;
+    }
+    if (e.key === 'PageUp' || e.key === 'PageDown') {
+      e.preventDefault();
+      const j = s.i + (e.key === 'PageUp' ? -1 : 1);
+      if (j >= 0 && j <= prog.unlocked && j < LEVELS.length) load(j);
+      return;
+    }
+    if (e.key === 'ArrowUp' && document.activeElement === input) {
+      e.preventDefault();
+      $('fb').className = 'hint'; $('fb').textContent = `Hint: ${LEVELS[s.i].hint}`;
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (s.state === 'solved') advance(); else submit();
+      if (s.state !== 'over') input.focus();
+    }
+  });
+  $('go').addEventListener('click', start);
+  hud();
+  $('go').focus();
+})();
+</script>

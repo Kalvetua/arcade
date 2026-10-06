@@ -1,0 +1,666 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Phish or Legit</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: wide cabinet, HUD, then a panel with a reference list of known senders, the message (email or login page), verdict buttons and the explanation. */
+  :root { --accent: #ff9e64; --paper: #f4f1ea; --paper-ink: #1d2a30; --paper-muted: #5b6b72; }
+  .cab { max-width: 760px; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 560px; }
+  .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #streak { color: var(--accent); }
+  details.ref { font-size: 0.8rem; color: var(--muted); background: var(--ground); border-radius: 4px; padding: 8px 12px; box-shadow: inset 0 0 0 1px var(--grid); }
+  details.ref summary { cursor: pointer; color: var(--ink); }
+  details.ref summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  details.ref ul { margin: 8px 0 2px; padding-left: 18px; line-height: 1.6; }
+  details.ref p { margin: 8px 0 0; line-height: 1.5; }
+  #ctx { margin: 0; font-size: 0.85rem; line-height: 1.5; padding: 8px 12px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 12%, var(--ground)); border-left: 3px solid var(--accent); }
+
+  /* The message itself is drawn on a light "paper" card so it reads like a mail client. */
+  #msg { background: var(--paper); color: var(--paper-ink); border-radius: 6px; overflow: hidden; font-size: 0.86rem; line-height: 1.5; outline: none; }
+  #msg:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .hdr { padding: 12px 14px; border-bottom: 1px solid #d8d2c4; display: grid; grid-template-columns: max-content 1fr; gap: 3px 10px; }
+  .hdr .k { color: var(--paper-muted); }
+  .hdr .v { overflow-wrap: anywhere; }
+  .hdr .subj { font-weight: 600; }
+  .body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .body p { margin: 0; overflow-wrap: anywhere; }
+  .lnk { color: #1a56c4; text-decoration: underline; }
+  .lnk sup { font-size: 0.7em; margin-left: 1px; }
+  .atts { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px 12px; }
+  .att { background: #e6e0d2; border-radius: 4px; padding: 4px 10px; font-size: 0.8rem; }
+  .att::before { content: "📎 "; }
+  .notes { background: #e2ddd0; padding: 8px 14px; font-size: 0.78rem; color: var(--paper-ink); display: flex; flex-direction: column; gap: 2px; }
+  .notes span { overflow-wrap: anywhere; }
+  .notes b { font-weight: 600; }
+  /* Login page mockup */
+  .bar { display: flex; align-items: center; gap: 8px; background: #d9d4c7; padding: 8px 12px; }
+  .bar .dots { color: #8d8676; letter-spacing: 2px; }
+  .bar .url { flex: 1; background: #fff; border-radius: 14px; padding: 4px 12px; overflow-wrap: anywhere; font-size: 0.82rem; }
+  .page { padding: 22px 14px 26px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .page h3 { margin: 0; font-size: 1.1rem; }
+  .form { display: flex; flex-direction: column; gap: 8px; width: min(100%, 300px); padding: 6px; border-radius: 4px; }
+  .form label { font-size: 0.78rem; color: var(--paper-muted); display: flex; flex-direction: column; gap: 2px; }
+  .form .field { background: #fff; border: 1px solid #c9c2b2; border-radius: 3px; height: 30px; }
+  .form .btn { background: #2f5d8a; color: #fff; text-align: center; border-radius: 3px; padding: 6px; font-weight: 600; }
+  .page small { color: var(--paper-muted); text-align: center; }
+
+  /* Highlights shown after answering */
+  [data-t] { position: relative; border-radius: 3px; }
+  .flag { outline: 3px solid #d6304f; outline-offset: 1px; background: #ffdfe4; }
+  .okay { outline: 3px solid #1f9e63; outline-offset: 1px; background: #dcf5e8; }
+  .badge { display: inline-block; min-width: 1.5em; text-align: center; font-size: 0.72rem; font-weight: 600; border-radius: 9px; padding: 0 5px; margin-right: 6px; color: #fff; background: #d6304f; }
+  .okay > .badge, .badge.ok { background: #1f9e63; }
+
+  .verdict { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .verdict button { display: flex; gap: 10px; align-items: center; justify-content: center; }
+  .verdict button:focus-visible, #next:focus-visible, #go:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  #bp { background: var(--danger); }
+  #bl { background: var(--good); }
+  .verdict button:disabled { opacity: 0.45; cursor: default; }
+  #fb { display: flex; flex-direction: column; gap: 8px; font-size: 0.88rem; line-height: 1.55; }
+  #fb p { margin: 0; }
+  #fb .right { color: var(--good); font-weight: 600; }
+  #fb .wrong { color: var(--danger); font-weight: 600; }
+  #fb ol { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  #fb li { display: flex; gap: 4px; align-items: baseline; }
+  #next { align-self: flex-start; }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+</style>
+
+<div class="cab">
+  <h1>Phish or Legit</h1>
+  <p class="rule">Decide whether each email or sign-in page is a phishing attempt or a legitimate message. Correct calls earn points, streaks earn bonus points, and three wrong calls end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Message 1</span><span id="streak"></span></div>
+    <details class="ref" id="ref">
+      <summary>Who you are and the real addresses of the organizations you deal with</summary>
+      <p>You are Jordan Lee. You work at Larkhaven (jordan.lee@larkhaven.example), and your personal address is jordan.lee@inbox.example. All organizations here are fictional.</p>
+      <ul>
+        <li>Larkhaven, your employer, uses larkhaven.example.</li>
+        <li>Brindlewick Bank, your bank, uses brindlewick-bank.example.</li>
+        <li>Tamsford Payroll, Larkhaven’s payroll provider, uses tamsfordpayroll.example.</li>
+        <li>Cloudmere Airlines uses cloudmere-air.example.</li>
+        <li>Hollowmill Parcel, a delivery company, uses hollowmill-parcel.example.</li>
+        <li>Glimmerwell Drive, a file-sharing service, uses glimmerwell.example.</li>
+        <li>Velvetreel, your streaming service, uses velvetreel.example.</li>
+        <li>Marblecrest Toys, an online store, uses marblecresttoys.example.</li>
+        <li>Quillbyte, a software vendor Larkhaven buys from, uses quillbyte.example.</li>
+      </ul>
+    </details>
+    <p id="ctx" hidden></p>
+    <div id="msg" tabindex="-1" aria-label="Message to judge"></div>
+    <div class="verdict">
+      <button id="bp" type="button"><kbd>P</kbd> Phishing</button>
+      <button id="bl" type="button"><kbd>L</kbd> Legitimate</button>
+    </div>
+    <div id="fb" aria-live="polite"></div>
+    <button id="next" type="button" hidden>Next message</button>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Read each message, check where its links really go, and press P for phishing or L for legitimate. Open the list of real addresses at the top of the panel whenever you need it.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Press <kbd>P</kbd> for phishing or <kbd>L</kbd> for legitimate, and press <kbd>Enter</kbd> to start a game or move on to the next message. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const KEY = 'phishOrLegitBest', LIVES = 3;
+  const W = 'Jordan Lee <jordan.lee@larkhaven.example>', H = 'Jordan Lee <jordan.lee@inbox.example>';
+
+  // Email: { v, ctx?, from: [name, address], reply?, to, subj, date, body: [paragraphs, {n} marks link n], links: [[visible text, real destination]], att?, signs, sum }
+  // Login page: { kind: 'login', v, ctx, url, brand, fields, button, signs, sum }
+  // signs: [target, text]; targets are from, reply, to, subj, p0..pN, link1..N, att1..N, url, form, ctx.
+  const ITEMS = [
+    { v: 'phish', from: ['Brindlewick Bank Security', 'security@brindlewlck-bank.example'], to: H,
+      subj: 'Unusual sign-in attempt: verify your account within 24 hours', date: 'Mon, Sep 28, 2026, 6:12 AM',
+      body: ['Dear Customer,', 'We detected an unusual sign-in attempt on your online banking account from a new device. For your protection, access has been temporarily limited.', 'To restore full access, please verify your identity within 24 hours: {1}', 'If you do not verify, your account will be permanently suspended.'],
+      links: [['Verify my account', 'https://brindlewlck-bank.example/secure/verify']],
+      signs: [['from', 'The sender’s domain is brindlewlck-bank.example, with a lowercase l where the i should be. The bank’s real domain is brindlewick-bank.example.'],
+        ['link1', 'The link goes to the same lookalike domain, where a fake sign-in page would collect your password.'],
+        ['p0', 'Your bank knows your name, but this message opens with a generic “Dear Customer.”'],
+        ['p3', 'The threat of permanent suspension is there to rush you into clicking without checking.']],
+      sum: 'A lookalike domain plus a deadline and a threat is a classic credential-phishing pattern.' },
+
+    { v: 'phish', from: ['Brindlewick Bank', 'statements@brindlewick-bank.example.secure-login.test'], to: H,
+      subj: 'Your September statement is ready', date: 'Thu, Oct 1, 2026, 9:40 AM',
+      body: ['Hello Jordan Lee,', 'Your September account statement is now available. Sign in to view it here: {1}', 'Thank you for banking with Brindlewick Bank.'],
+      links: [['https://brindlewick-bank.example/statements', 'https://brindlewick-bank.example.secure-login.test/statements']],
+      signs: [['link1', 'The visible link text shows the real bank address, but the link actually goes to a host under secure-login.test. Read a domain from the right: the part that matters is secure-login.test.'],
+        ['from', 'The sender’s address ends in secure-login.test too. Putting the real name at the start of a longer domain is a common trick.']],
+      sum: 'The greeting uses your name and the tone is calm, but the real destination of the link gives it away.' },
+
+    { v: 'phish', from: ['Larkhaven IT Helpdesk', 'helpdesk@larkhaven-it-support.test'], to: W,
+      subj: 'Mailbox storage full: new messages will be deleted', date: 'Tue, Sep 29, 2026, 4:55 PM',
+      body: ['Hi,', 'Your mailbox has reached 99% of its storage limit. Incoming messages will be deleted starting tonight.', 'To keep receiving email, sign in and request more storage: {1}', 'Larkhaven IT Helpdesk'],
+      links: [['Increase my quota', 'https://larkhaven-it-support.test/owa/login']],
+      signs: [['from', 'Larkhaven’s IT department would write from larkhaven.example, not from the outside domain larkhaven-it-support.test.'],
+        ['link1', 'The sign-in link goes to larkhaven-it-support.test, so you would be typing your work password into someone else’s site.'],
+        ['p1', 'Deleting your mail “starting tonight” is invented urgency.']],
+      sum: 'Fake IT notices about storage or passwords are among the most common workplace phishing lures.' },
+
+    { v: 'phish', from: ['Dana Whitfield', 'dana.whitfield.ceo@mail.example'], to: W,
+      subj: 'Quick favor', date: 'Fri, Oct 2, 2026, 10:03 AM',
+      body: ['Jordan, are you at your desk? I need a quick favor.', 'Please buy six $200 gift cards for a client appreciation event. Keep this between us for now; it’s a surprise.', 'Scratch off the backs and email me photos of the codes. I’m in meetings all day, so email only, please.', 'Dana Whitfield, CEO'],
+      links: [],
+      signs: [['from', 'Larkhaven’s CEO would write from larkhaven.example. Anyone can create a free mailbox with an executive’s name in it.'],
+        ['p1', 'Gift cards are a favorite payment method for scammers because they are hard to trace and can’t be reversed.'],
+        ['p2', 'Asking for photos of the codes, secrecy, and “email only” are designed to stop you from checking with anyone.']],
+      sum: 'This is a gift card scam that impersonates an executive. Verify unusual requests through a channel you already trust, such as a phone number from the company directory.' },
+
+    { v: 'phish', from: ['Tamsford Payroll', 'payroll@tamsfordpayroll.example'], reply: 'payroll-update@quickmail.test', to: W,
+      subj: 'Action required: confirm your direct deposit details', date: 'Wed, Sep 30, 2026, 7:21 AM',
+      body: ['Hello,', 'Because of a system upgrade, all employees must confirm their bank details before Friday’s payroll run, or their payment will be delayed.', 'Please reply to this email with your bank name, account number and routing number.', 'Tamsford Payroll Services'],
+      links: [],
+      signs: [['reply', 'The Reply-To address is on quickmail.test, so your answer would go to a stranger rather than to Tamsford Payroll.'],
+        ['from', 'The From line looks right, but it is easy to forge. That is exactly why the Reply-To matters.'],
+        ['p2', 'Payroll providers don’t collect bank account numbers by email reply; you change them in the payroll portal.'],
+        ['p1', 'A threat of delayed pay is used to create pressure.']],
+      sum: 'A mismatched Reply-To address is a strong sign that someone wants your answer to go somewhere else.' },
+
+    { v: 'phish', ctx: 'You haven’t booked any flights with Cloudmere Airlines this year.',
+      from: ['Cloudmere Airlines', 'booking@cloudmere-airlines-checkin.test'], to: H,
+      subj: 'Your e-ticket receipt CM-48213', date: 'Sat, Oct 3, 2026, 11:47 PM',
+      body: ['Dear Passenger,', 'Thank you for flying with us. Your e-ticket is attached.', 'Open the attachment to view your itinerary and confirm your seat before check-in closes.'],
+      links: [], att: ['E-Ticket_CM48213.html'],
+      signs: [['att1', 'An .html attachment opens a web page from your own computer, and it is often a disguised sign-in form. Airlines send tickets as PDF files or links to their own site.'],
+        ['from', 'The airline’s real domain is cloudmere-air.example, not cloudmere-airlines-checkin.test.'],
+        ['p0', 'A real airline receipt greets you by name and lists the flight details in the email itself.'],
+        ['ctx', 'You didn’t book a flight, so this receipt is unexpected.']],
+      sum: 'Unexpected receipts with HTML attachments are a common way to deliver fake login pages.' },
+
+    { v: 'phish', from: ['Hollowmill Parcel', 'noreply@hollowmill-parcel.delivery-fees.test'], to: H,
+      subj: 'Delivery attempt failed: customs fee of $1.99 due', date: 'Mon, Oct 5, 2026, 8:02 AM',
+      body: ['Dear customer,', 'We tried to deliver your parcel today, but a customs fee of $1.99 has not been paid.', 'Pay the fee within 48 hours to reschedule delivery, or the parcel will be returned to the sender: {1}'],
+      links: [['Pay $1.99 and reschedule', 'https://hollowmill-parcel.delivery-fees.test/pay']],
+      signs: [['link1', 'The payment page is on delivery-fees.test. The name hollowmill-parcel at the start is just a subdomain label anyone can choose.'],
+        ['p1', 'A tiny fee makes paying feel harmless, but the real goal is your full card number and security code.'],
+        ['from', 'The sender’s domain is also delivery-fees.test, not hollowmill-parcel.example.']],
+      sum: 'Small “customs” or “redelivery” fees are a classic lure for stealing card details.' },
+
+    { v: 'phish', from: ['Glimmerwell Drive', 'share@glimmerwell-docs.test'], to: W,
+      subj: 'Mark Ellison shared “Q3 Bonus Structure.xlsx” with you', date: 'Thu, Oct 1, 2026, 3:15 PM',
+      body: ['Mark Ellison has shared a file with you.', '“Q3 Bonus Structure.xlsx”: {1}', 'You will need to sign in with your work email and password to view this file.'],
+      links: [['Open the file', 'https://glimmerwell-docs.test/view?id=88412']],
+      signs: [['from', 'Glimmerwell Drive sends notifications from glimmerwell.example, not glimmerwell-docs.test.'],
+        ['link1', 'The link goes to glimmerwell-docs.test, which has nothing to do with Glimmerwell.'],
+        ['subj', 'A file about bonuses is chosen to make you curious enough to click.'],
+        ['p2', 'Asking for your work password on a file-sharing page is the actual goal of the message.']],
+      sum: 'Fake file-sharing notifications with an enticing file name are a very common credential lure.' },
+
+    { v: 'phish', from: ['Accounts Receivable', 'ar@invoice-notices.test'], to: W,
+      subj: 'Overdue invoice INV-20931: final notice', date: 'Tue, Sep 29, 2026, 1:30 PM',
+      body: ['Hello,', 'Our records show that invoice INV-20931 is 45 days overdue. Please review the attached invoice today to avoid collection fees.', 'Regards, Accounts Receivable'],
+      links: [], att: ['INV-20931.iso'],
+      signs: [['att1', 'An .iso file is a disk image. Opening it mounts it like a drive, and attackers use it to deliver programs while avoiding some security checks. Real invoices are PDF files.'],
+        ['from', 'The sender isn’t a vendor you know, and the domain invoice-notices.test isn’t related to any organization you deal with.'],
+        ['p1', '“Final notice” and collection fees are there to rush you.']],
+      sum: 'Unusual attachment types like .iso, .img, .zip or .html on an invoice are a major warning sign.' },
+
+    { v: 'phish', from: ['Velvetreel', 'billing@velvetree1.example'], to: H,
+      subj: 'Your membership is on hold', date: 'Sun, Oct 4, 2026, 7:58 PM',
+      body: ['Hi there,', 'We couldn’t process your latest payment, so your membership has been put on hold.', 'Update your payment details to keep watching: {1}'],
+      links: [['Update payment details', 'https://velvetree1.example/account/billing']],
+      signs: [['from', 'The domain is velvetree1.example, with the digit 1 in place of the letter l. The real one is velvetreel.example.'],
+        ['link1', 'The link goes to the same lookalike domain.'],
+        ['p0', 'Velvetreel knows your name, but the greeting is generic.']],
+      sum: 'Swapping l for 1 (or O for 0) is one of the oldest lookalike tricks, and it is easy to miss at a glance.' },
+
+    { v: 'phish', from: ['Tamsford Payroll', 'documents@tarnsfordpayroll.example'], to: W,
+      subj: 'Your 2025 tax form is ready to download', date: 'Mon, Sep 28, 2026, 9:05 AM',
+      body: ['Hello,', 'Your annual tax form is ready. Download it here: {1}', 'You will be asked to confirm your Social Security number before the download starts.'],
+      links: [['Download tax form', 'https://tarnsfordpayroll.example/forms/download']],
+      signs: [['from', 'Look closely: tarnsfordpayroll.example uses the letters r and n, which together look like an m. The real domain is tamsfordpayroll.example.'],
+        ['link1', 'The link goes to the same lookalike domain.'],
+        ['p2', 'Asking for your Social Security number before a download is a way to steal it.']],
+      sum: 'The “rn” for “m” trick is especially hard to spot in small fonts.' },
+
+    { v: 'phish', kind: 'login', ctx: 'You reached this page from a link in an email that said your account was locked.',
+      url: 'https://brindlewick-bank.example.account-verify.test/login', brand: 'Brindlewick Bank', fields: ['Username', 'Password', 'Card number', 'Card PIN'], button: 'Unlock account',
+      signs: [['url', 'The address ends in account-verify.test. The words brindlewick-bank.example at the start are just part of a longer host name on someone else’s domain.'],
+        ['form', 'No bank asks for your card PIN on a web page. The PIN is only for ATMs and card terminals.'],
+        ['ctx', 'You arrived from an email link about a locked account, which is a common lure.']],
+      sum: 'The padlock only means the connection is encrypted. It says nothing about who owns the site.' },
+
+    { v: 'phish', kind: 'login', ctx: 'You clicked a link in an email titled “Your password expires today.”',
+      url: 'http://larkhaven.example-sso.test/adfs/ls/login', brand: 'Larkhaven single sign-on', fields: ['Work email', 'Password'], button: 'Sign in',
+      signs: [['url', 'The real domain here is example-sso.test, not larkhaven.example, and the page doesn’t even use HTTPS.'],
+        ['ctx', 'Password-expiry emails with sign-in links are a common lure; change passwords through the address you normally use.']],
+      sum: 'Read the host name from the right: the last two labels before the path decide who owns the site.' },
+
+    { v: 'phish', kind: 'login', ctx: 'A text message said someone shared a file with you on Glimmerwell Drive and gave this link.',
+      url: 'https://glimmerwell.example@203.0.113.45/signin', brand: 'Glimmerwell Drive', fields: ['Email', 'Password'], button: 'Sign in',
+      signs: [['url', 'Everything before the @ in a web address is treated as a user name. This page actually comes from the server at 203.0.113.45, not from glimmerwell.example.'],
+        ['ctx', 'An unexpected link in a text message is a reason to go to the site yourself instead.']],
+      sum: 'The @ trick hides the real host behind a familiar name, so always look at what comes after the @.' },
+
+    { v: 'phish', from: ['Voicemail Service', 'voicemail@larkhaven.example.vm-notify.test'], to: W,
+      subj: 'You have 1 new voicemail (0:47)', date: 'Wed, Sep 30, 2026, 2:12 PM',
+      body: ['You received a new voicemail from +1 555 0119.', 'Duration: 47 seconds.', 'Open the attached file to play the message.'],
+      links: [], att: ['VM_0047.htm'],
+      signs: [['att1', 'A voicemail would be an audio file or a link to your phone system. An .htm attachment is a web page, and it typically shows a fake sign-in form.'],
+        ['from', 'The domain is vm-notify.test. The text larkhaven.example at the start is only a subdomain label.']],
+      sum: 'Fake voicemail notifications with HTML attachments are a common workplace phishing lure.' },
+
+    { v: 'phish', from: ['Quillbyte Licensing', 'licensing@quillbyte.example'], reply: 'quillbyte.billing@inbox-mail.test', to: W,
+      subj: 'Updated bank details for your license renewal', date: 'Thu, Oct 1, 2026, 8:44 AM',
+      body: ['Dear valued customer,', 'Please note that we have changed banks. Future payments, including your current renewal invoice, must go to the new account listed in the attached file.', 'Payments sent to our old account will not be credited. Please confirm by replying to this email.'],
+      links: [], att: ['Renewal_Invoice.zip'],
+      signs: [['reply', 'Replies go to inbox-mail.test, a free mailbox, instead of quillbyte.example.'],
+        ['p1', 'A vendor “changing banks” by email is the core of invoice fraud. Always confirm by calling a number you already have.'],
+        ['att1', 'A .zip file can hide a program, while a real invoice would be a PDF.'],
+        ['p0', 'A real vendor would address Larkhaven by name rather than as a “valued customer.”']],
+      sum: 'This is business email compromise: the goal is to redirect a real payment to a criminal’s account.' },
+
+    { v: 'phish', from: ['Larkhaven Human Resources', 'hr@larkhaven-hr.test'], to: W,
+      subj: 'Updated leave policy: acknowledgment required', date: 'Mon, Oct 5, 2026, 10:30 AM',
+      body: ['Hello,', 'All employees must read and acknowledge the updated leave policy by the end of the day.', 'Open the attached document and click “Enable Content” to load the acknowledgment form.'],
+      links: [], att: ['Updated_Leave_Policy.docm'],
+      signs: [['att1', 'A .docm file is a Word document with macros, and macros can run code on your computer.'],
+        ['p2', 'Telling you to click “Enable Content” is how macro malware gets permission to run.'],
+        ['from', 'Larkhaven HR writes from larkhaven.example, not larkhaven-hr.test.']],
+      sum: 'Never enable macros in a document that arrived by email unless you were expecting exactly that file.' },
+
+    { v: 'phish', from: ['Revenue Refunds Office', 'refunds@revenue-refunds.test'], to: H,
+      subj: 'You are eligible for a tax refund of $428.16', date: 'Tue, Sep 29, 2026, 6:40 AM',
+      body: ['Dear Taxpayer,', 'After a review of your account, you are eligible for a refund of $428.16.', 'To receive the refund, submit your card details within 3 days: {1}'],
+      links: [['Claim my refund', 'https://refund-claims.test/claim']],
+      signs: [['p2', 'Refunds are paid to the account you used when you filed. Nobody needs your card details to send you money.'],
+        ['link1', 'The link goes to refund-claims.test, which is not an official tax website.'],
+        ['p0', '“Dear Taxpayer” is a generic greeting from someone who doesn’t know who you are.']],
+      sum: 'Unexpected money plus a short deadline is a lure to collect your card details.' },
+
+    { v: 'phish', from: ['Cloudmere Airlines Rewards', 'rewards@cloudmere-air.example.rewards-gift.test'], to: H,
+      subj: 'Congratulations! You have been selected for 2 free round-trip tickets', date: 'Sat, Oct 3, 2026, 12:05 PM',
+      body: ['Congratulations!', 'To celebrate our anniversary, you have been chosen to receive two free round-trip tickets.', 'Complete a short survey and pay a $1 processing fee to claim them: {1}'],
+      links: [['Claim my tickets', 'https://rewards-gift.test/cloudmere/survey']],
+      signs: [['from', 'The sender’s domain is rewards-gift.test. The airline’s name in front of it doesn’t make it the airline.'],
+        ['link1', 'The link goes to rewards-gift.test.'],
+        ['p2', 'A “processing fee” on a free prize is a way to get your card number.']],
+      sum: 'Prizes you never entered for, especially ones with a small fee, are almost always scams.' },
+
+    { v: 'phish', from: ['IT Service Desk', 'servicedesk@larkhaven.example'], to: W,
+      subj: 'Your password expires today', date: 'Wed, Sep 30, 2026, 8:15 AM',
+      body: ['Hi Jordan,', 'Your Larkhaven password expires today. To keep access to email and files, update it now: {1}', 'Thank you, IT Service Desk'],
+      links: [['https://sso.larkhaven.example/password', 'https://sso-larkhaven.example/password']],
+      signs: [['link1', 'The link text shows sso.larkhaven.example, but the real destination is sso-larkhaven.example. A hyphen instead of a dot makes it a completely different domain.'],
+        ['from', 'The From address looks right, but it can be forged, so the link is what matters.']],
+      sum: 'Even with your name and a correct-looking sender, a link that goes somewhere else is decisive.' },
+
+    { v: 'phish', from: ['Marblecrest Toys Orders', 'orders@marblecrest-toys-support.test'], to: H,
+      subj: 'Your order MC-55120 for $899.99 has shipped', date: 'Sun, Oct 4, 2026, 9:22 PM',
+      body: ['Thank you for your order of a 65-inch smart TV ($899.99).', 'If you did not authorize this purchase, call our fraud desk at +1 555 0142 within 24 hours to cancel it and receive a refund.'],
+      links: [],
+      signs: [['p1', 'This is callback phishing: the phone number leads to scammers who will ask for card details or remote access to your computer.'],
+        ['from', 'Marblecrest Toys uses marblecresttoys.example, not marblecrest-toys-support.test.'],
+        ['p0', 'A large purchase you didn’t make is meant to panic you into calling quickly.']],
+      sum: 'If you are worried about a charge, check your account by going to the store’s site yourself or call the number on your card.' },
+
+    { v: 'phish', from: ['Brindlewick Bank Support', 'support@brindlewick-bank-help.test'], to: H,
+      subj: 'Confirm you are the account owner', date: 'Fri, Oct 2, 2026, 5:50 PM',
+      body: ['Hello Jordan,', 'To finish a security review of your account, we are sending a verification code to your phone.', 'Please reply to this email with the code as soon as you receive it.'],
+      links: [],
+      signs: [['p2', 'Verification codes prove that you are the one signing in. Anyone who gets the code can use it to take over your account, and a bank will never ask you to share it.'],
+        ['from', 'The domain brindlewick-bank-help.test is not the bank’s domain, brindlewick-bank.example.']],
+      sum: 'The attacker is probably signing in as you right now and needs the code that the real bank just sent you.' },
+
+    { v: 'phish', kind: 'login', ctx: 'You followed a link in an email that said a coworker shared a spreadsheet with you.',
+      url: 'https://glimmervvell.example/signin?continue=shared', brand: 'Glimmerwell Drive', fields: ['Email', 'Password'], button: 'Sign in',
+      signs: [['url', 'The domain is glimmervvell.example, with two v’s where the w should be. The real one is glimmerwell.example.'],
+        ['ctx', 'An emailed sharing link that asks you to sign in is a common way to steal passwords.']],
+      sum: 'A password manager helps here, because it won’t offer to fill in your password on a lookalike domain.' },
+
+    { v: 'phish', from: ['Payroll Notices', 'hr-notices@larkhaven-payroll.test'], to: W,
+      subj: 'Confidential: your salary adjustment letter', date: 'Thu, Oct 1, 2026, 4:48 PM',
+      body: ['Hello,', 'Please find your confidential salary adjustment letter attached. Do not share it with coworkers.'],
+      links: [], att: ['Salary_Adjustment_2026.pdf.exe'],
+      signs: [['att1', 'The real file extension is the last one, .exe, so this is a program pretending to be a PDF.'],
+        ['from', 'The domain larkhaven-payroll.test isn’t Larkhaven or its payroll provider.'],
+        ['subj', 'A confidential salary letter is a lure that almost anyone would open.']],
+      sum: 'Double extensions such as .pdf.exe rely on systems that hide known file extensions.' },
+
+    // Legitimate messages
+    { v: 'legit', ctx: 'A minute ago, you clicked “Forgot password” on Glimmerwell Drive.',
+      from: ['Glimmerwell Drive', 'no-reply@glimmerwell.example'], to: H,
+      subj: 'Reset your Glimmerwell Drive password', date: 'Tue, Oct 6, 2026, 9:31 AM',
+      body: ['Hi Jordan,', 'We received a request to reset the password for jordan.lee@inbox.example. Use this link within 30 minutes: {1}', 'If you didn’t ask for this, you can ignore this email, and your password won’t change.'],
+      links: [['Reset password', 'https://account.glimmerwell.example/reset?token=7f3c9a2e']],
+      signs: [['ctx', 'You asked for this email a minute ago, so it is expected.'],
+        ['from', 'The sender is glimmerwell.example, the service’s real domain.'],
+        ['link1', 'The link goes to account.glimmerwell.example, a subdomain of glimmerwell.example.'],
+        ['p2', 'It tells you to ignore it if you didn’t ask, without threats or pressure.']],
+      sum: 'Password-reset emails you just requested are expected and safe, as long as the link goes to the real domain.' },
+
+    { v: 'legit', from: ['Larkhaven IT', 'it-announcements@larkhaven.example'], to: W,
+      subj: 'Planned maintenance: VPN unavailable Saturday from 10 PM to 2 AM', date: 'Mon, Sep 28, 2026, 11:00 AM',
+      body: ['Hello everyone,', 'The VPN will be unavailable on Saturday, October 10, from 10 PM to 2 AM while we upgrade the gateways. You don’t need to do anything.', 'Updates will appear on the status page: {1}', 'Larkhaven IT'],
+      links: [['IT status page', 'https://status.larkhaven.example']],
+      signs: [['from', 'It comes from larkhaven.example, your employer’s real domain.'],
+        ['p1', 'It doesn’t ask you to sign in, download anything or act quickly.'],
+        ['link1', 'The only link goes to status.larkhaven.example.']],
+      sum: 'An informational notice with no request for action or credentials is low risk.' },
+
+    { v: 'legit', from: ['Brindlewick Bank', 'alerts@brindlewick-bank.example'], to: H,
+      subj: 'Did you make this purchase?', date: 'Fri, Oct 2, 2026, 8:17 PM',
+      body: ['Hi Jordan,', 'We noticed a card purchase of $412.00 at Tindlecreek Winery today.', 'If this was you, no action is needed. If it wasn’t, call the number on the back of your card or open the Brindlewick Bank app yourself.', 'We will never ask for your PIN, password or verification codes by email.'],
+      links: [],
+      signs: [['from', 'The sender is brindlewick-bank.example, the bank’s real domain.'],
+        ['p2', 'Instead of a link or a phone number in the email, it points you to contact details you already have.'],
+        ['p3', 'It asks for nothing sensitive.']],
+      sum: 'Fraud alerts look alarming, but this one only asks you to use channels you already trust.' },
+
+    { v: 'legit', ctx: 'Yesterday, you booked a flight to Denver on the Cloudmere Airlines website.',
+      from: ['Cloudmere Airlines', 'reservations@cloudmere-air.example'], to: H,
+      subj: 'Booking confirmation CM7Q2K: Seattle to Denver', date: 'Sun, Oct 4, 2026, 6:05 PM',
+      body: ['Hi Jordan,', 'Thank you for booking with Cloudmere Airlines. Your flight CM 482 departs Seattle on October 16 at 7:40 AM.', 'Your itinerary is attached, and you can manage your booking here: {1}'],
+      links: [['Manage booking', 'https://www.cloudmere-air.example/manage?ref=CM7Q2K']],
+      att: ['Itinerary_CM7Q2K.pdf'],
+      signs: [['ctx', 'You made this booking yesterday, so the confirmation is expected.'],
+        ['from', 'It comes from cloudmere-air.example, the airline’s real domain.'],
+        ['link1', 'The link goes to www.cloudmere-air.example.'],
+        ['att1', 'A PDF itinerary is a normal attachment for a booking.']],
+      sum: 'Expected confirmations with matching details and real domains are safe.' },
+
+    { v: 'legit', from: ['Tamsford Payroll', 'notifications@tamsfordpayroll.example'], to: W,
+      subj: 'Your pay statement for September 30 is available', date: 'Wed, Sep 30, 2026, 6:00 AM',
+      body: ['Hi Jordan,', 'Your pay statement for September 30 is ready in the employee portal: {1}', 'For your security, we don’t attach pay statements to email.'],
+      links: [['View pay statement', 'https://portal.tamsfordpayroll.example/statements']],
+      signs: [['from', 'The sender is tamsfordpayroll.example, spelled correctly.'],
+        ['link1', 'The link goes to portal.tamsfordpayroll.example.'],
+        ['p2', 'There is no attachment and no request for personal details.']],
+      sum: 'A routine notice from the right domain that links to the right portal is legitimate.' },
+
+    { v: 'legit', ctx: 'You ordered headphones from Marblecrest Toys on Monday.',
+      from: ['Hollowmill Parcel', 'tracking@hollowmill-parcel.example'], to: H,
+      subj: 'Your package is out for delivery', date: 'Wed, Oct 7, 2026, 7:45 AM',
+      body: ['Hi Jordan,', 'Your package from Marblecrest Toys is out for delivery and should arrive today between 1 PM and 5 PM.', 'Track it here: {1}'],
+      links: [['Track package', 'https://track.hollowmill-parcel.example/HP88123456']],
+      signs: [['ctx', 'You are expecting a package, and the email names the store you ordered from.'],
+        ['from', 'It comes from hollowmill-parcel.example.'],
+        ['link1', 'The tracking link stays on hollowmill-parcel.example.'],
+        ['p1', 'No fees and no requests for payment or personal details.']],
+      sum: 'A tracking update that matches a real order and asks for nothing is fine.' },
+
+    { v: 'legit', ctx: 'You just signed in to Glimmerwell Drive on your new phone.',
+      from: ['Glimmerwell Drive', 'security@glimmerwell.example'], to: H,
+      subj: 'New sign-in to your Glimmerwell account', date: 'Tue, Oct 6, 2026, 12:12 PM',
+      body: ['Hi Jordan,', 'Your Glimmerwell account was just used to sign in on a new device: a phone in Seattle.', 'If this was you, you don’t need to do anything. If it wasn’t, review your recent activity and change your password: {1}'],
+      links: [['Review recent activity', 'https://account.glimmerwell.example/security']],
+      signs: [['ctx', 'The sign-in it describes is the one you just did.'],
+        ['from', 'The sender is glimmerwell.example.'],
+        ['link1', 'The link goes to account.glimmerwell.example.'],
+        ['p2', 'It says no action is needed if it was you, which phishing emails rarely do.']],
+      sum: 'Security alerts can be legitimate; check that they match something you did and that links go to the real domain.' },
+
+    { v: 'legit', ctx: 'Your manager announced this rollout at Monday’s team meeting.',
+      from: ['Larkhaven IT Security', 'itsecurity@larkhaven.example'], to: W,
+      subj: 'Action required by October 15: set up multi-factor authentication', date: 'Tue, Oct 6, 2026, 10:00 AM',
+      body: ['Hello Jordan,', 'As announced, all employees must set up multi-factor authentication by October 15. After that date, you won’t be able to sign in without it.', 'Set it up on the enrollment page, which uses your normal Larkhaven sign-in: {1}', 'If you have questions, contact the IT service desk at extension 4400.'],
+      links: [['MFA enrollment page', 'https://sso.larkhaven.example/mfa/enroll']],
+      signs: [['ctx', 'You heard about this rollout from your manager, so it is expected.'],
+        ['from', 'It comes from larkhaven.example.'],
+        ['link1', 'The link goes to sso.larkhaven.example, a subdomain of your employer’s real domain.'],
+        ['p1', 'The deadline is more than a week away, not a matter of hours.']],
+      sum: 'A deadline alone doesn’t make a message phishing. Everything here checks out, and you can still reach the page by typing the address yourself.' },
+
+    { v: 'legit', ctx: 'Priya told you in chat this morning that she would share the roadmap draft.',
+      from: ['Priya Shah (via Glimmerwell Drive)', 'drive-shares-noreply@glimmerwell.example'], to: W,
+      subj: 'Priya Shah shared “Q4 Roadmap Draft” with you', date: 'Tue, Oct 6, 2026, 11:20 AM',
+      body: ['Priya Shah (priya.shah@larkhaven.example) shared a document with you.', '“Here’s the draft we talked about. Comments welcome!”', '{1}'],
+      links: [['Open “Q4 Roadmap Draft”', 'https://drive.glimmerwell.example/d/8K2xQ']],
+      signs: [['ctx', 'Priya told you to expect it.'],
+        ['from', 'The notification comes from glimmerwell.example, and it names Priya’s Larkhaven address.'],
+        ['link1', 'The link goes to drive.glimmerwell.example.']],
+      sum: 'Sharing notifications are safe when you expect them and the link goes to the real service.' },
+
+    { v: 'legit', ctx: 'Your team renewed its Quillbyte subscription last week.',
+      from: ['Quillbyte Billing', 'billing@quillbyte.example'], to: W,
+      subj: 'Receipt for your Quillbyte renewal', date: 'Thu, Oct 1, 2026, 2:00 PM',
+      body: ['Hello Jordan,', 'Thank you for renewing Larkhaven’s Quillbyte Team subscription. Your payment of $1,200.00 was received on September 30.', 'A copy of the invoice is attached for your records.'],
+      links: [], att: ['Quillbyte_Invoice_2026-1043.pdf'],
+      signs: [['ctx', 'The renewal really happened, so a receipt is expected.'],
+        ['from', 'The sender is quillbyte.example, the vendor’s real domain, and there is no different Reply-To.'],
+        ['p1', 'It confirms a payment you made and asks for nothing.'],
+        ['att1', 'A PDF invoice is a normal attachment.']],
+      sum: 'Receipts for things you actually bought, from the real domain, are fine.' },
+
+    { v: 'legit', from: ['Brindlewick Bank', 'news@email.brindlewick-bank.example'], to: H,
+      subj: 'Five ways to grow your savings this fall', date: 'Thu, Oct 1, 2026, 10:00 AM',
+      body: ['Hi Jordan,', 'Our fall newsletter has tips on automatic transfers, savings goals and more.', 'Read the article: {1}', 'You are receiving this because you subscribed to Brindlewick Bank news. Unsubscribe in your account settings.'],
+      links: [['Read our savings tips', 'https://email.brindlewick-bank.example/c/a81f3?u=savings-tips']],
+      signs: [['from', 'It comes from email.brindlewick-bank.example, a subdomain of the real domain. Companies often send newsletters from a separate subdomain.'],
+        ['link1', 'The link looks odd because it is a click-tracking link, but it stays on brindlewick-bank.example.'],
+        ['p3', 'It asks for nothing and explains why you are receiving it.']],
+      sum: 'Tracking links can look strange; what matters is that the domain they go to is the real one.' },
+
+    { v: 'legit', kind: 'login', ctx: 'You typed hr.larkhaven.example into the address bar yourself, and it redirected you here.',
+      url: 'https://sso.larkhaven.example/login?app=hr', brand: 'Larkhaven single sign-on', fields: ['Work email', 'Password'], button: 'Sign in',
+      signs: [['url', 'The host is sso.larkhaven.example, which belongs to larkhaven.example, and the page uses HTTPS.'],
+        ['ctx', 'You started from an address you typed yourself, so a redirect to your company’s sign-in page is expected.'],
+        ['form', 'It asks only for your normal work sign-in details.']],
+      sum: 'Navigating to a site yourself is the safest way to reach a sign-in page.' },
+
+    { v: 'legit', kind: 'login', ctx: 'You opened the Brindlewick Bank bookmark that you saved months ago.',
+      url: 'https://online.brindlewick-bank.example/signin', brand: 'Brindlewick Bank', fields: ['Username', 'Password'], button: 'Sign in',
+      signs: [['url', 'The host online.brindlewick-bank.example is a subdomain of the bank’s real domain.'],
+        ['ctx', 'You came from your own bookmark rather than a link in a message.'],
+        ['form', 'It asks only for your username and password, with no PIN or card details.']],
+      sum: 'A bookmark you created yourself leads to the real site.' },
+
+    { v: 'legit', from: ['Velvetreel', 'info@velvetreel.example'], to: H,
+      subj: 'Your plan price is changing on November 1', date: 'Fri, Oct 2, 2026, 9:00 AM',
+      body: ['Hi Jordan,', 'Starting November 1, your Standard plan will cost $11.99 a month instead of $10.99.', 'You don’t need to do anything. If you want to change or cancel your plan, sign in at {1}', 'Thank you for watching with Velvetreel.'],
+      links: [['velvetreel.example/account', 'https://www.velvetreel.example/account']],
+      signs: [['from', 'The sender is velvetreel.example, spelled correctly.'],
+        ['link1', 'The visible link text and the real destination match.'],
+        ['p2', 'It says no action is needed and sets no deadline.']],
+      sum: 'An unwelcome message isn’t necessarily a malicious one.' },
+
+    { v: 'legit', ctx: 'You ordered headphones from Marblecrest Toys on Monday.',
+      from: ['Marblecrest Toys', 'orders@marblecresttoys.example'], reply: 'support@marblecresttoys.example', to: H,
+      subj: 'Order MC-61377 confirmed', date: 'Mon, Oct 5, 2026, 1:14 PM',
+      body: ['Hi Jordan,', 'Thanks for your order of wireless headphones ($79.99). We will email you when it ships.', 'Questions? Just reply to this email, or view your order: {1}'],
+      links: [['View your order', 'https://www.marblecresttoys.example/orders/MC-61377']],
+      signs: [['reply', 'The Reply-To differs from the From address, but both are on marblecresttoys.example, which is normal for a support team.'],
+        ['ctx', 'The order matches what you actually bought.'],
+        ['link1', 'The link goes to www.marblecresttoys.example.']],
+      sum: 'A different Reply-To is only a warning sign when it points to an unrelated domain.' },
+
+    { v: 'legit', ctx: 'You were in the planning meeting with Marcus this morning.',
+      from: ['Marcus Bell', 'marcus.bell@larkhaven.example'], to: W,
+      subj: 'Notes from today’s planning meeting', date: 'Tue, Oct 6, 2026, 3:02 PM',
+      body: ['Hi Jordan,', 'Thanks for joining this morning. I’ve attached my notes, including the two action items we agreed you would take on.', 'Let me know if I missed anything.', 'Marcus'],
+      links: [], att: ['Planning_Notes.docx'],
+      signs: [['from', 'It comes from a coworker’s address on larkhaven.example.'],
+        ['ctx', 'It follows up on a meeting you actually attended, with specific details.'],
+        ['att1', 'A .docx file is a normal Word document; unlike .docm, it can’t contain macros.']],
+      sum: 'Expected attachments from a known coworker, in an ordinary format, are fine.' },
+
+    { v: 'legit', ctx: 'You have the Cloudmere Airlines booking CM7Q2K for October 16.',
+      from: ['Cloudmere Airlines', 'alerts@cloudmere-air.example'], to: H,
+      subj: 'Flight CM 482 is delayed by 3 hours', date: 'Fri, Oct 16, 2026, 4:30 AM',
+      body: ['Hi Jordan,', 'We’re sorry. Flight CM 482 from Seattle to Denver is now scheduled to depart at 10:40 AM instead of 7:40 AM.', 'You can see rebooking options for booking CM7Q2K here: {1}'],
+      links: [['View rebooking options', 'https://www.cloudmere-air.example/trips/CM7Q2K']],
+      signs: [['ctx', 'The flight and booking code match your real trip.'],
+        ['from', 'It comes from cloudmere-air.example.'],
+        ['link1', 'The link goes to www.cloudmere-air.example.'],
+        ['p2', 'It offers options without asking for payment or a password in the email.']],
+      sum: 'Bad news can be real news: everything here matches your booking and the airline’s real domain.' },
+  ];
+
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, streak: 0, n: 0, right: 0, queue: [], cur: null };
+  $('best').textContent = best.toLocaleString('en-US');
+  const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
+  function hud() {
+    $('score').textContent = s.score.toLocaleString('en-US');
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', plural(s.lives, 'life', 'lives'));
+    $('streak').textContent = s.streak > 1 ? `${s.streak} correct in a row` : '';
+  }
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  // --- Rendering ---
+  const mk = (tag, cls, text, t) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; if (t) e.dataset.t = t; return e; };
+  function renderEmail(it) {
+    const box = $('msg');
+    const hdr = mk('div', 'hdr');
+    const row = (k, v, t, cls) => { hdr.append(mk('span', 'k', k)); hdr.append(mk('span', `v${cls ? ' ' + cls : ''}`, v, t)); };
+    row('From:', `${it.from[0]} <${it.from[1]}>`, 'from');
+    if (it.reply) row('Reply-To:', it.reply, 'reply');
+    row('To:', it.to, 'to');
+    row('Date:', it.date);
+    row('Subject:', it.subj, 'subj', 'subj');
+    box.append(hdr);
+    const body = mk('div', 'body');
+    it.body.forEach((text, i) => {
+      const p = mk('p', null, null, `p${i}`);
+      text.split(/(\{\d+\})/).forEach(part => {
+        const m = /^\{(\d+)\}$/.exec(part);
+        if (!m) { if (part) p.append(part); return; }
+        const n = Number(m[1]);
+        const a = mk('span', 'lnk', it.links[n - 1][0], `link${n}`);
+        const sup = mk('sup', null, String(n)); a.append(sup);
+        p.append(a);
+      });
+      body.append(p);
+    });
+    box.append(body);
+    if (it.att && it.att.length) {
+      const atts = mk('div', 'atts');
+      it.att.forEach((a, i) => atts.append(mk('span', 'att', a, `att${i + 1}`)));
+      box.append(atts);
+    }
+    if (it.links.length) {
+      const notes = mk('div', 'notes');
+      it.links.forEach(([, href], i) => {
+        const line = mk('span', null, null, `link${i + 1}`);
+        line.append(mk('b', null, `Link ${i + 1} goes to: `), href);
+        notes.append(line);
+      });
+      box.append(notes);
+    }
+    box.setAttribute('aria-label', `Email from ${it.from[0]} with the subject ${it.subj}`);
+  }
+  function renderLogin(it) {
+    const box = $('msg');
+    const bar = mk('div', 'bar');
+    bar.append(mk('span', 'dots', '● ● ●'), mk('span', 'url', `${it.url.startsWith('https') ? '🔒 ' : '⚠ '}${it.url}`, 'url'));
+    const page = mk('div', 'page');
+    page.append(mk('h3', null, it.brand));
+    const form = mk('div', 'form', null, 'form');
+    it.fields.forEach(f => { const l = mk('label', null, f); l.append(mk('span', 'field')); form.append(l); });
+    form.append(mk('span', 'btn', it.button));
+    page.append(form, mk('small', null, 'This is a picture of a sign-in page. You can’t type into it.'));
+    box.append(bar, page);
+    box.setAttribute('aria-label', `Sign-in page at ${it.url}`);
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, streak: 0, n: 0, right: 0, queue: Arcade.shuffle(ITEMS) });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+  function next() {
+    if (!s.queue.length) return gameOver(true);
+    s.cur = s.queue.pop();
+    s.n++;
+    const it = s.cur;
+    $('num').textContent = `Message ${s.n} of ${ITEMS.length}`;
+    $('ctx').hidden = !it.ctx;
+    $('ctx').textContent = it.ctx || '';
+    $('ctx').classList.remove('flag', 'okay');
+    $('ctx').dataset.t = 'ctx';
+    $('msg').textContent = '';
+    if (it.kind === 'login') renderLogin(it); else renderEmail(it);
+    $('fb').textContent = '';
+    $('next').hidden = true;
+    $('bp').disabled = $('bl').disabled = false;
+    s.state = 'ask';
+    $('msg').focus();
+  }
+  function answer(call) {
+    if (s.state !== 'ask') return;
+    s.state = 'reveal';
+    const it = s.cur, phish = it.v === 'phish', right = (call === 'phish') === phish;
+    $('bp').disabled = $('bl').disabled = true;
+    const fb = $('fb');
+    fb.textContent = '';
+    if (right) {
+      s.streak++; s.right++;
+      const pts = 100 + 25 * Math.min(s.streak - 1, 8);
+      s.score += pts;
+      fb.append(mk('p', 'right', `Correct! +${plural(pts, 'point', 'points')}.${s.streak > 1 ? ` That’s ${s.streak} in a row.` : ''}`));
+    } else {
+      s.streak = 0; s.lives--;
+      fb.append(mk('p', 'wrong', `Not quite. This ${it.kind === 'login' ? 'page' : 'message'} was ${phish ? 'a phishing attempt' : 'legitimate'}.`));
+    }
+    fb.append(mk('p', null, phish ? 'Here are the warning signs, marked in red on the message:' : 'Here is why it’s fine, marked in green on the message:'));
+    const ol = mk('ol');
+    const scope = [$('msg'), $('ctx')];
+    it.signs.forEach(([t, text], i) => {
+      const li = mk('li');
+      li.append(mk('span', `badge${phish ? '' : ' ok'}`, String(i + 1)), text);
+      ol.append(li);
+      scope.forEach(root => {
+        const targets = root.dataset.t === t ? [root] : [...root.querySelectorAll(`[data-t="${t}"]`)];
+        targets.forEach(e => {
+          e.classList.add(phish ? 'flag' : 'okay');
+          if (!e.querySelector(':scope > .badge')) e.prepend(mk('span', 'badge', String(i + 1)));
+        });
+      });
+    });
+    fb.append(ol, mk('p', null, it.sum));
+    hud();
+    $('next').textContent = s.lives <= 0 || !s.queue.length ? 'See results' : 'Next message';
+    $('next').hidden = false;
+    $('next').focus();
+  }
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives <= 0) return gameOver(false);
+    next();
+  }
+  function gameOver(all) {
+    s.state = 'over';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = best.toLocaleString('en-US');
+    const what = `You scored ${plural(s.score, 'point', 'points')} with ${plural(s.right, 'correct call', 'correct calls')} out of ${plural(s.n, 'message', 'messages')}.`;
+    const tail = s.score > prev ? ' That’s a new best!' : (best ? ` Your best is ${best.toLocaleString('en-US')}.` : '');
+    showOverlay(all ? 'Inbox cleared' : 'Game over', what + tail, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const k = e.key.toLowerCase();
+    if (s.state === 'ask' && (k === 'p' || k === 'l')) { e.preventDefault(); answer(k === 'p' ? 'phish' : 'legit'); }
+    else if (s.state === 'reveal' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); advance(); }
+    else if ((s.state === 'ready' || s.state === 'over') && e.key === 'Enter') { e.preventDefault(); start(); }
+  });
+  $('bp').addEventListener('click', () => answer('phish'));
+  $('bl').addEventListener('click', () => answer('legit'));
+  $('next').addEventListener('click', advance);
+  $('go').addEventListener('click', start);
+  $('go').focus();
+})();
+</script>

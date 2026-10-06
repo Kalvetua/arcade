@@ -1,0 +1,1475 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Terminal Escape</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: briefing column on the left, fake terminal on the right (stacked on narrow screens). */
+  :root { --accent: #4be38a; }
+  .cab { max-width: 820px; }
+  h1 { color: var(--accent); }
+  .panel { padding: 14px; }
+  .game { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 14px; }
+  @media (max-width: 720px) { .game { grid-template-columns: 1fr; } .brief { max-height: none; } .term { height: 380px; } }
+  .brief { font-size: 0.82rem; line-height: 1.55; max-height: 470px; overflow-y: auto; }
+  .brief .tag { margin: 0; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  .brief h2 { font-family: var(--display); font-weight: 400; font-size: 1.1rem; margin: 4px 0 8px; color: var(--accent); }
+  .brief h3 { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin: 12px 0 4px; font-weight: 600; }
+  .brief p { margin: 0 0 8px; }
+  .brief code { background: var(--ground); padding: 0 4px; border-radius: 3px; color: var(--food); white-space: nowrap; }
+  .term {
+    background: #07141b; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    height: 470px; overflow-y: auto; padding: 10px 12px; font: 13px/1.45 var(--mono); cursor: text;
+  }
+  .term:focus-within { box-shadow: inset 0 0 0 3px var(--accent); }
+  #log > div { white-space: pre-wrap; word-break: break-word; }
+  .line { display: flex; white-space: pre; }
+  .line input {
+    flex: 1; min-width: 0; background: transparent; border: 0; padding: 0; margin: 0;
+    color: var(--ink); font: inherit; outline: none; caret-color: var(--accent);
+  }
+  .err { color: #ff8fa3; }
+  .info { color: var(--food); }
+  .pu { color: var(--good); font-weight: 600; }
+  .pp { color: #6cb6ff; font-weight: 600; }
+  .c-dir { color: #6cb6ff; font-weight: 600; }
+  .c-exe { color: var(--good); font-weight: 600; }
+  .c-match { color: var(--danger); font-weight: 600; }
+  .c-file { color: var(--ghost); }
+  .c-num { color: var(--good); }
+  .c-sep { color: #5fc9d6; }
+  .measure { position: absolute; visibility: hidden; white-space: pre; font: 13px var(--mono); }
+  .btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .overlay button:focus-visible { outline: 4px solid var(--accent); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) { .term { scroll-behavior: auto; } }
+</style>
+
+<div class="cab">
+  <h1>Terminal Escape</h1>
+  <p class="rule">Each level drops you into a new practice Linux shell with a mission. Use real commands to find the hidden code, and learn one new skill in every level.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Level</span><span class="v" id="hlevel">1</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="hbest">0</span></div>
+    <div class="stat"><span class="k">Hints</span><span class="v" id="hhints">0</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="game">
+      <aside class="brief" aria-label="Level briefing">
+        <p class="tag" id="ltag">Level 1 of 12</p>
+        <h2 id="ltitle"></h2>
+        <div id="lesson"></div>
+        <h3>Your mission</h3>
+        <p id="mission"></p>
+      </aside>
+      <div class="term" id="term">
+        <div id="log" role="log" aria-live="polite" aria-label="Terminal output"></div>
+        <div class="line"><span id="prompt"></span><input id="cmd" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Terminal command"></div>
+      </div>
+    </div>
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp"></p>
+      <div class="btns">
+        <button id="go" type="button">Start game</button>
+        <button id="alt" type="button" class="ghost" hidden>Start from level 1</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="keys">Type commands and press <kbd>Enter</kbd> to run them. Use <kbd>↑</kbd> and <kbd>↓</kbd> for earlier commands, <kbd>Tab</kbd> to complete names, <kbd>Ctrl+C</kbd> to cancel a line and <kbd>Ctrl+L</kbd> to clear the screen. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+/*ENGINE-START*/
+  // ---------- A small, entirely in-memory fake shell. Nothing here touches the real computer. ----------
+  const HOME = '/home/player';
+  const CODE_ABC = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const WORDS = 'apple river stone cloud maple ember quartz harbor lantern meadow orbit pepper rocket saddle timber velvet willow anchor badger candle dragon falcon garden hammer island jacket kettle lemon marble needle oyster pillow rabbit silver tiger umbrella violet walnut yellow zebra copper forest planet signal bridge castle desert engine glacier jungle mirror nickel ocean parrot puzzle ribbon shadow tunnel valley window winter summer autumn cobalt thunder breeze canyon comet pebble sparrow cactus lagoon prairie beacon compass'.split(' ');
+
+  function mkRng(seed) {
+    let s = seed >>> 0;
+    return () => {
+      s = s + 0x6D2B79F5 | 0;
+      let t = Math.imul(s ^ s >>> 15, 1 | s);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+  const tools = rng => ({
+    rng,
+    int: (a, b) => a + Math.floor(rng() * (b - a + 1)),
+    pick: arr => arr[Math.floor(rng() * arr.length)],
+    shuffle(arr) { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; },
+    code: n => Array.from({ length: n }, () => CODE_ABC[Math.floor(rng() * CODE_ABC.length)]).join(''),
+  });
+  const dir = (kids = {}, o = {}) => ({ t: 'd', mode: 0o755, kids, ...o });
+  const file = (content, o = {}) => ({ t: 'f', mode: 0o644, content, ...o });
+  const linesOf = text => { if (!text) return []; const a = text.split('\n'); if (a[a.length - 1] === '') a.pop(); return a; };
+  const joinLines = arr => arr.length ? arr.join('\n') + '\n' : '';
+  const strip = s => s.replace(/\x01.|\x02/g, '');
+  const paint = (cls, s, on) => on ? `\x01${cls}${s}\x02` : s;
+  const reEsc = s => s.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+  const collator = new Intl.Collator('en-US');
+  const cmpName = (a, b) => collator.compare(a.replace(/^\.+/, ''), b.replace(/^\.+/, '')) || (a < b ? -1 : a > b ? 1 : 0);
+  const b64 = s => (typeof btoa === 'function' ? btoa(s) : Buffer.from(s).toString('base64'));
+
+  // Shell-style glob (also used by find -name): * ? [abc] [!abc], backslash escapes.
+  function globRe(pat, flags = '') {
+    let re = '';
+    for (let i = 0; i < pat.length; i++) {
+      const ch = pat[i];
+      if (ch === '\\' && i + 1 < pat.length) { re += reEsc(pat[++i]); continue; }
+      if (ch === '*') { re += '[^/]*'; continue; }
+      if (ch === '?') { re += '[^/]'; continue; }
+      if (ch === '[') {
+        let j = i + 1, neg = false, body = '', first = true;
+        if (pat[j] === '!' || pat[j] === '^') { neg = true; j++; }
+        while (j < pat.length && (pat[j] !== ']' || first)) { const c = pat[j]; body += '\\[]^'.includes(c) ? '\\' + c : c; first = false; j++; }
+        if (j >= pat.length) { re += '\\['; continue; }
+        re += '[' + (neg ? '^' : '') + body + ']';
+        i = j;
+        continue;
+      }
+      re += reEsc(ch);
+    }
+    return new RegExp('^' + re + '$', flags);
+  }
+  const hasGlob = pat => /(^|[^\\])[*?[]/.test(pat);
+
+  // POSIX basic regular expression (what grep uses by default) to a JavaScript regex source.
+  function breToJs(p) {
+    let out = '';
+    for (let i = 0; i < p.length; i++) {
+      const ch = p[i];
+      if (ch === '\\' && i + 1 < p.length) {
+        const n = p[++i];
+        out += '|()+?{}'.includes(n) ? n : '\\' + n;
+      } else if ('|()+?{}'.includes(ch)) out += '\\' + ch;
+      else if (ch === '[') {
+        let j = i + 1;
+        if (p[j] === '^') j++;
+        if (p[j] === ']') j++;
+        while (j < p.length && p[j] !== ']') j++;
+        if (j >= p.length) { out += '\\['; continue; }
+        out += p.slice(i, j + 1).replace(/\\/g, '\\\\');
+        i = j;
+      } else if (ch === '*' && (out === '' || out === '^')) out += '\\*';
+      else out += ch;
+    }
+    return out;
+  }
+
+  function baseFS() {
+    return dir({
+      bin: dir(), etc: dir({ hostname: file('escape\n'), motd: file('Welcome to the escape practice server.\n') }),
+      home: dir({ player: dir() }), opt: dir(), tmp: dir({}, { mode: 0o1777 }),
+      usr: dir({ bin: dir(), share: dir() }), var: dir({ log: dir() }),
+    });
+  }
+
+  const COMMANDS = ['cat', 'cd', 'chmod', 'clear', 'echo', 'exit', 'find', 'grep', 'head', 'help', 'hint', 'history', 'ls', 'pwd', 'sort', 'submit', 'tail', 'uniq', 'wc', 'whoami'];
+  const USAGE = {
+    ls: 'Usage: ls [OPTION]... [FILE]...', cat: 'Usage: cat [OPTION]... [FILE]...', head: 'Usage: head [OPTION]... [FILE]...',
+    tail: 'Usage: tail [OPTION]... [FILE]...', grep: 'Usage: grep [OPTION]... PATTERNS [FILE]...', find: 'Usage: find [path...] [expression]',
+    wc: 'Usage: wc [OPTION]... [FILE]...', sort: 'Usage: sort [OPTION]... [FILE]...', uniq: 'Usage: uniq [OPTION]... [INPUT]',
+    chmod: 'Usage: chmod [OPTION]... MODE[,MODE]... FILE...', echo: 'Usage: echo [SHORT-OPTION]... [STRING]...',
+  };
+  const HELP = `This practice shell understands these commands:
+
+  pwd                     Print the current directory.
+  ls [-a] [-l] [path]     List the contents of a directory.
+  cd [path]               Change to another directory.
+  cat file                Print the contents of a file.
+  head [-n N] file        Print the first lines of a file.
+  tail [-n N] file        Print the last lines of a file.
+  grep [-irnvc] word      Print the lines that contain a word.
+  find path -name "*.x"   Search for files by name.
+  wc [-lwc]               Count lines, words and bytes.
+  sort [-nr]              Sort lines.
+  uniq [-c]               Collapse repeated neighboring lines.
+  echo text               Print text.
+  chmod mode file         Change the permissions of a file.
+  ./script                Run an executable file.
+  history                 Show the commands you have typed.
+  clear                   Clear the screen. Ctrl+L does the same.
+
+You can send the output of one command into another with a pipe, as in ls | wc -l.
+Type hint for a clue about this level, and type submit followed by the code when you find it.
+`;
+
+  // ---------- Levels ----------
+  const mailSubjects = ['Lunch on Friday', 'Quarterly report', 'Server maintenance', 'Welcome aboard', 'Password reminder', 'Team photo', 'Budget review', 'Coffee machine', 'Holiday schedule', 'New printer', 'Project update', 'Parking change', 'Office plants', 'Book club', 'Training session', 'Fire drill'];
+  const mailPeople = ['alice', 'bruno', 'chen', 'dana', 'emeka', 'farah', 'gus', 'hana'];
+  const logMsgs = ['GET /index.html 200', 'GET /about.html 200', 'POST /login 302', 'GET /missing.png 404', 'cache refreshed', 'backup finished', 'worker started', 'connection reset by peer', 'disk usage at 71%', 'user session expired', 'GET /api/status 200', 'slow query took 2.3s'];
+
+  function logLines(t, n, startHour) {
+    const out = [];
+    let sec = startHour * 3600;
+    for (let i = 0; i < n; i++) {
+      sec += t.int(1, 40);
+      const hh = String(Math.floor(sec / 3600) % 24).padStart(2, '0'), mm = String(Math.floor(sec / 60) % 60).padStart(2, '0'), ss = String(sec % 60).padStart(2, '0');
+      const lvl = t.pick(['INFO', 'INFO', 'INFO', 'WARN', 'ERROR']);
+      out.push(`2026-10-05 ${hh}:${mm}:${ss} ${lvl.padEnd(5)} ${t.pick(logMsgs)}`);
+    }
+    return out;
+  }
+
+  const LEVELS = [
+    {
+      title: 'Look around',
+      lesson: `<p>The shell always has a current directory. <code>pwd</code> prints where you are, <code>ls</code> lists what is inside, and <code>cd name</code> moves into a directory.</p><p>Your home directory is <code>/home/player</code>, and the prompt shows it as <code>~</code>. Directories appear in blue.</p>`,
+      learned: 'You learned that pwd shows where you are, ls lists what is in a directory, and cd moves you into another directory.',
+      build(t) {
+        const code = t.code(4);
+        return {
+          code,
+          home: {
+            docs: dir({ 'note.txt': file(`Welcome to Terminal Escape!\nYou can read files like this one with cat. You will learn more about it in the next level.\n`) }),
+            music: dir({ 'playlist.txt': file('1. Morning Light\n2. River Song\n3. Night Drive\n') }),
+            photos: dir({ 'beach.txt': file('This is a description of a photo of a sunny beach.\n') }),
+            vault: dir({ [code]: file('The name of this file is the code.\n') }),
+          },
+          mission: `In your home directory there is a directory called <code>vault</code>. Move into it with <code>cd</code> and list what is inside with <code>ls</code>. The name of the only file in it is the code. Submit it by typing <code>submit</code> followed by the code.`,
+          hints: [
+            'Type ls to see what is in your current directory. Directories are shown in blue.',
+            'Type cd vault to move into the vault directory, and then type ls again.',
+            'The name of the file is the code. If the file were called AB12, you would type submit AB12.',
+          ],
+          solution: ['pwd', 'ls', 'cd vault', 'ls', `submit ${code}`],
+          evidence: [code],
+        };
+      },
+    },
+    {
+      title: 'Read a file',
+      lesson: `<p><code>cat file</code> prints the whole contents of a file. You can give it several files at once, as in <code>cat a.txt b.txt</code>, and it prints them one after another.</p>`,
+      learned: 'You learned that cat prints the contents of one or more files.',
+      build(t) {
+        const code = t.code(4);
+        const names = ['letter.txt', 'notes.txt', 'readme.txt', 'todo.txt'];
+        const target = t.pick(names);
+        const base = {
+          'letter.txt': ['Dear Player,', 'Thank you for joining the escape team.', 'We hope you enjoy your stay.', 'Kind regards,', 'The Management'],
+          'notes.txt': ['Meeting notes', 'The door lock was replaced on Monday.', 'Remember to water the plants.'],
+          'readme.txt': ['This computer belongs to the escape team.', 'Please keep your files tidy.'],
+          'todo.txt': ['Buy coffee', 'Fix the squeaky chair', 'Call the locksmith'],
+        };
+        const home = {};
+        for (const n of names) {
+          const ls = [...base[n]];
+          if (n === target) ls.splice(t.int(1, ls.length - 1), 0, `FLAG=${code}`);
+          home[n] = file(joinLines(ls));
+        }
+        return {
+          code, home,
+          mission: `One of the text files in your home directory has a line that starts with <code>FLAG=</code>. Read the files with <code>cat</code> to find it, and then submit the code that comes after <code>FLAG=</code>.`,
+          hints: [
+            'Use ls to see the file names, and then read one of them with cat.',
+            'You can read all of them at once by typing cat followed by every file name.',
+            `The code is in ${target}. Type cat ${target} and submit the part after FLAG=.`,
+          ],
+          solution: ['ls', `cat ${target}`, `submit ${code}`],
+          evidence: [`FLAG=${code}`],
+        };
+      },
+    },
+    {
+      title: 'Hidden files',
+      lesson: `<p>Files whose names start with a dot are hidden, so a plain <code>ls</code> skips them. <code>ls -a</code> shows every entry, including <code>.</code> (the current directory) and <code>..</code> (the parent directory).</p>`,
+      learned: 'You learned that names starting with a dot are hidden and that ls -a shows them.',
+      build(t) {
+        const code = t.code(4);
+        const secret = t.pick(['.vault_key', '.secret_code', '.door_code']);
+        return {
+          code,
+          home: {
+            'readme.txt': file('There is nothing to see here. Some files are better at hiding than others.\n'),
+            'notes.txt': file('Shopping list: bread, milk, batteries.\n'),
+            '.bashrc': file('# ~/.bashrc: settings for interactive shells\nalias ll=\'ls -alF\'\nexport EDITOR=nano\n'),
+            '.profile': file('# ~/.profile: runs when you log in\nPATH="$HOME/bin:$PATH"\n'),
+            '.cache': dir({ 'thumbnails.db': file('cache data\n') }),
+            [secret]: file(`You found the hidden file.\nFLAG=${code}\n`),
+          },
+          mission: `A hidden file in your home directory holds the code. Find it and read it with <code>cat</code>.`,
+          hints: [
+            'Hidden files start with a dot, and ls does not show them unless you ask.',
+            'Type ls -a to see every file, including the hidden ones.',
+            `The file is called ${secret}. Type cat ${secret} to read it.`,
+          ],
+          solution: ['ls -a', `cat ${secret}`, `submit ${code}`],
+          evidence: [`FLAG=${code}`],
+        };
+      },
+    },
+    {
+      title: 'Paths',
+      lesson: `<p>A path that starts with <code>/</code> is absolute, which means it is read from the root of the file system. Any other path is relative to where you are.</p><p><code>..</code> means the parent directory, so <code>cd ../..</code> goes up two levels. <code>~</code> means your home directory, so <code>cat ~/notes.txt</code> works from anywhere. <code>cd -</code> takes you back to the previous directory.</p>`,
+      learned: 'You learned the difference between absolute and relative paths, and how .. and ~ work.',
+      build(t) {
+        const code = t.code(4);
+        return {
+          code, cwd: `${HOME}/projects/site/css`,
+          home: {
+            projects: dir({
+              'plan.txt': file(`Project plan\nThe website is almost finished.\nThe map you need is in your home directory at ~/maps/route.txt.\nYou can read it from anywhere by starting the path with ~.\n`),
+              site: dir({
+                'index.html': file('<h1>Welcome</h1>\n'), 'about.html': file('<h1>About us</h1>\n'),
+                css: dir({ 'style.css': file('body { color: black; }\n'), 'layout.css': file('main { width: 80%; }\n') }),
+              }),
+            }),
+            maps: dir({ 'route.txt': file('The key is stored outside your home directory, at the absolute path /var/escape/key.txt.\n') }),
+          },
+          mount: { '/var/escape': dir({ 'key.txt': file(`FLAG=${code}\n`) }) },
+          mission: `You are deep inside a project. The file <code>plan.txt</code> is two directories above you. Read it and follow the trail that it starts.`,
+          hints: [
+            'Use pwd to see where you are. The parent of the parent directory is ../..',
+            'Type cat ../../plan.txt. It points to a file under ~, which you can read from anywhere.',
+            'The trail leads from ~/maps/route.txt to /var/escape/key.txt. Type cat /var/escape/key.txt.',
+          ],
+          solution: ['pwd', 'cat ../../plan.txt', 'cat ~/maps/route.txt', 'cat /var/escape/key.txt', `submit ${code}`],
+          evidence: [`FLAG=${code}`],
+        };
+      },
+    },
+    {
+      title: 'Head and tail',
+      lesson: `<p><code>head file</code> prints the first 10 lines of a file, and <code>tail file</code> prints the last 10. Add <code>-n N</code> to choose how many lines you want, as in <code>tail -n 3 log.txt</code>.</p><p>This is much easier than scrolling through a huge file.</p>`,
+      learned: 'You learned that head and tail show the beginning and the end of a file.',
+      build(t) {
+        const p1 = t.code(2), p2 = t.code(2);
+        const ls = logLines(t, 498, 0);
+        ls.unshift(`=== Log opened. The first half of the code is ${p1}. ===`);
+        ls.push(`=== Log closed. The second half of the code is ${p2}. ===`);
+        return {
+          code: p1 + p2,
+          home: { logs: dir({ 'server.log': file(joinLines(ls)), 'old.log': file(joinLines(logLines(t, 40, 3))) }) },
+          mission: `The file <code>logs/server.log</code> has 500 lines. Its first line contains the first half of the code and its last line contains the second half. Submit both halves together as one code.`,
+          hints: [
+            'You do not need to read all 500 lines. Look only at the first and the last line.',
+            'head -n 1 shows only the first line of a file, and tail -n 1 shows only the last line.',
+            'Type head -n 1 logs/server.log and tail -n 1 logs/server.log. If the halves were AB and CD, you would type submit ABCD.',
+          ],
+          solution: ['head -n 1 logs/server.log', 'tail -n 1 logs/server.log', `submit ${p1 + p2}`],
+          evidence: [`first half of the code is ${p1}`, `second half of the code is ${p2}`],
+        };
+      },
+    },
+    {
+      title: 'Search with grep',
+      lesson: `<p><code>grep word file</code> prints every line of a file that contains the word. Searches are case-sensitive, so add <code>-i</code> to ignore case.</p><p><code>-n</code> shows line numbers, <code>-v</code> shows the lines that do not match, and <code>-c</code> counts the matching lines.</p>`,
+      learned: 'You learned that grep finds matching lines in a file, and that -i makes it ignore uppercase and lowercase.',
+      build(t) {
+        const code = t.code(4);
+        const ls = Array.from({ length: 1996 }, () => t.pick(WORDS));
+        const extras = ['flagpole', 'flagpole', 'Flagship store', `Flag: ${code}`];
+        for (const e of extras) ls.splice(t.int(20, ls.length - 20), 0, e);
+        return {
+          code,
+          home: { data: dir({ 'words.txt': file(joinLines(ls)) }) },
+          mission: `The file <code>data/words.txt</code> has 2,000 lines. One of them contains the word flag followed by the code, but you do not know whether it is written in uppercase or lowercase.`,
+          hints: [
+            'Reading 2,000 lines is slow. grep prints only the lines that match.',
+            'grep flag data/words.txt only finds lowercase matches. Add -i to ignore case.',
+            'Type grep -i flag data/words.txt. The line you want looks like Flag: AB12, and the code is the part after the colon.',
+          ],
+          solution: ['grep flag data/words.txt', 'grep -i flag data/words.txt', `submit ${code}`],
+          evidence: [`Flag: ${code}`],
+        };
+      },
+    },
+    {
+      title: 'Search everywhere',
+      lesson: `<p><code>grep -r word dir</code> searches every file inside a directory and all of its subdirectories. It prints each match with the file name in front of it.</p><p>This is the fastest way to search a whole project at once.</p>`,
+      learned: 'You learned that grep -r searches through every file in a directory tree.',
+      build(t) {
+        const code = t.code(4);
+        const folders = { inbox: 12, sent: 9, drafts: 4, 'archive/2025': 14, 'archive/2026': 14 };
+        const all = [];
+        const tree = {};
+        for (const [path, n] of Object.entries(folders)) {
+          let d = tree;
+          for (const part of path.split('/')) d = (d[part] ||= dir()).kids;
+          const used = new Set();
+          for (let i = 0; i < n; i++) {
+            let name;
+            do { name = `${path.slice(-4).match(/\d{4}/) ? path.slice(-4) : '2026'}-${String(t.int(1, 12)).padStart(2, '0')}-${String(t.int(1, 28)).padStart(2, '0')}-${t.pick(mailSubjects).toLowerCase().replace(/ /g, '-')}.eml`; } while (used.has(name));
+            used.add(name);
+            const subj = name.slice(11, -4).replace(/-/g, ' ');
+            const body = [`From: ${t.pick(mailPeople)}@escape`, 'To: player@escape', `Subject: ${subj[0].toUpperCase() + subj.slice(1)}`, '', 'Hi Player,', t.pick(['Just a quick reminder about this.', 'I flagged this for review last week.', 'Please let me know what you think.', 'See you at the meeting.']), 'Thanks!'];
+            d[name] = file(joinLines(body));
+            all.push({ path: `mail/${path}/${name}`, node: d[name], body });
+          }
+        }
+        const target = t.pick(all);
+        target.body.splice(6, 0, `P.S. The door code is FLAG=${code}`);
+        target.node.content = joinLines(target.body);
+        return {
+          code,
+          home: { mail: dir(tree) },
+          mission: `Your <code>mail</code> directory holds dozens of emails in several folders. One of them contains a line with <code>FLAG=</code> and the code.`,
+          hints: [
+            'Reading every email with cat would take a long time.',
+            'Use grep -r with the word FLAG and the directory mail. Remember that grep is case-sensitive.',
+            'Type grep -r FLAG mail and submit the part after FLAG=.',
+          ],
+          solution: ['grep -r FLAG mail', `submit ${code}`],
+          evidence: [`FLAG=${code}`],
+        };
+      },
+    },
+    {
+      title: 'Find files by name',
+      lesson: `<p><code>find dir -name pattern</code> walks through a directory tree and prints every path whose name matches the pattern. In a pattern, <code>*</code> matches any characters, so <code>"*.txt"</code> matches every name that ends in .txt.</p><p>Put the pattern in quotes so that the shell passes it to find unchanged. Add <code>-type f</code> to list only files or <code>-type d</code> to list only directories.</p>`,
+      learned: 'You learned that find searches a directory tree by name and that -type f limits it to files.',
+      build(t) {
+        const code = t.code(4);
+        const exts = ['.txt', '.csv', '.log', '.bak', '.json', '.md'];
+        const top = ['projects', 'photos', 'backups', 'misc', 'old'];
+        const tree = {};
+        const leaves = [];
+        for (const a of top) {
+          tree[a] = dir();
+          const subs = t.shuffle(WORDS).slice(0, t.int(2, 3));
+          for (const s of subs) {
+            const sd = tree[a].kids[s] = dir();
+            leaves.push([`archive/${a}/${s}`, sd]);
+            for (let i = 0; i < t.int(3, 6); i++) sd.kids[t.pick(WORDS) + t.pick(exts)] = file(`${t.pick(WORDS)} ${t.pick(WORDS)} ${t.pick(WORDS)}\n`);
+          }
+          for (let i = 0; i < t.int(1, 3); i++) tree[a].kids[t.pick(WORDS) + t.pick(exts)] = file('old notes\n');
+        }
+        const [keyDir, keyNode] = t.pick(leaves);
+        const keyName = t.pick(WORDS) + '.key';
+        keyNode.kids[keyName] = file(`FLAG=${code}\n`);
+        let spare;
+        do { spare = t.pick(leaves); } while (spare[1] === keyNode);
+        spare[1].kids['spare.key'] = dir({ 'note.txt': file('This is just a directory. The real key file is somewhere else.\n') });
+        const keyPath = `${keyDir}/${keyName}`;
+        return {
+          code,
+          home: { archive: dir(tree) },
+          mission: `Somewhere under <code>archive</code> is the only file whose name ends in <code>.key</code>. Read it to get the code. Be careful, because there is also a directory whose name ends in .key.`,
+          hints: [
+            'Type find archive -name "*.key" to list everything whose name ends in .key.',
+            'One of the results is a directory. Add -type f to see only files.',
+            'Type find archive -type f -name "*.key", and then use cat on the path that it prints.',
+          ],
+          solution: ['find archive -name "*.key"', 'find archive -type f -name "*.key"', `cat ${keyPath}`, `submit ${code}`],
+          evidence: [keyPath, `FLAG=${code}`],
+        };
+      },
+    },
+    {
+      title: 'Pipes',
+      lesson: `<p>The pipe symbol <code>|</code> sends the output of one command into the next one. <code>wc -l</code> counts lines, so <code>ls dir | wc -l</code> counts the entries in a directory.</p><p>You can chain several commands, as in <code>cat file | grep word | wc -l</code>, which counts the lines that contain a word. <code>wc -w</code> counts words and <code>wc -c</code> counts bytes.</p>`,
+      learned: 'You learned that a pipe feeds one command’s output into the next, and that wc -l counts lines.',
+      build(t) {
+        const n = t.int(23, 49), f = t.int(6, 15);
+        const ids = t.shuffle(Array.from({ length: 9000 }, (_, i) => i + 1000)).slice(0, n);
+        const fragile = new Set(t.shuffle(ids).slice(0, f));
+        const items = ['plates', 'glasses', 'books', 'bolts', 'lamps', 'cables', 'mirrors', 'blankets', 'tools', 'vases'];
+        const crates = {};
+        const manifest = ['# Warehouse manifest. One line per crate.'];
+        for (const id of ids) {
+          const qty = t.int(2, 40), item = t.pick(items);
+          crates[`crate-${id}.txt`] = file(`Crate ${id}\nContents: ${qty} ${item}\n`);
+          manifest.push(`crate-${id}  ${qty} ${item}  ${fragile.has(id) ? 'fragile' : 'sturdy'}`);
+        }
+        return {
+          code: `${n}${f}`,
+          home: { warehouse: dir({ crates: dir(crates), 'manifest.txt': file(joinLines(manifest)) }) },
+          mission: `The code is the number of files in <code>warehouse/crates</code> followed directly by the number of lines in <code>warehouse/manifest.txt</code> that contain the word fragile. For example, 40 files and 7 lines would give the code 407.`,
+          hints: [
+            'Count the crates first. ls lists one name per line when its output goes into a pipe.',
+            'Type ls warehouse/crates | wc -l to count the files.',
+            'Then type cat warehouse/manifest.txt | grep fragile | wc -l, and submit the two numbers written together.',
+          ],
+          solution: ['ls warehouse/crates | wc -l', 'cat warehouse/manifest.txt | grep fragile | wc -l', `submit ${n}${f}`],
+          evidence: [`\n${n}\n`, `\n${f}\n`],
+        };
+      },
+    },
+    {
+      title: 'Sort and count',
+      lesson: `<p><code>sort</code> puts lines in order, <code>sort -n</code> sorts them by number, and <code>-r</code> reverses the order. <code>uniq -c</code> collapses repeated neighboring lines into one line and puts a count in front.</p><p>Because uniq only compares neighboring lines, you almost always sort first, as in <code>sort file | uniq -c</code>.</p>`,
+      learned: 'You learned that sort | uniq -c | sort -n counts how often each line appears.',
+      build(t) {
+        const ips = new Set();
+        while (ips.size < 12) ips.add(t.pick([`10.0.${t.int(0, 9)}.${t.int(2, 254)}`, `192.168.1.${t.int(2, 254)}`, `172.16.${t.int(0, 31)}.${t.int(2, 254)}`]));
+        const [winner, ...rest] = [...ips];
+        const top = t.int(30, 40);
+        let lines = Array(top).fill(winner);
+        for (const ip of rest) lines = lines.concat(Array(t.int(4, top - 3)).fill(ip));
+        lines = t.shuffle(lines);
+        return {
+          code: winner,
+          home: { logs: dir({ 'visitors.txt': file(joinLines(lines)) }) },
+          mission: `The file <code>logs/visitors.txt</code> lists the IP address of every visit to the server, one per line. The code is the IP address that appears most often.`,
+          hints: [
+            'Count each address with sort logs/visitors.txt | uniq -c.',
+            'Add | sort -n to the end so that the most frequent address ends up at the bottom.',
+            'Type sort logs/visitors.txt | uniq -c | sort -n | tail -n 1 and submit the address it shows.',
+          ],
+          solution: ['sort logs/visitors.txt | uniq -c | sort -n | tail -n 1', `submit ${winner}`],
+          evidence: [` ${top} ${winner}`],
+        };
+      },
+    },
+    {
+      title: 'Permissions',
+      lesson: `<p><code>ls -l</code> shows details for each file. The first column holds the permissions, such as <code>-rwxr-xr-x</code>. The letter r means read, w means write and x means execute, for the owner, the group and everyone else, in that order.</p><p>A file needs the x permission before you can run it with <code>./name</code>. <code>chmod +x file</code> adds it, and <code>chmod 755 file</code> sets <code>rwxr-xr-x</code> with numbers.</p>`,
+      learned: 'You learned to read permissions with ls -l, to add the execute permission with chmod +x, and to run a script with ./name.',
+      build(t) {
+        const code = t.code(4);
+        const names = ['alpha', 'bravo', 'charlie', 'delta', 'foxtrot', 'golf', 'hotel', 'india'].map(n => n + '.sh');
+        const calib = t.pick(names);
+        const decoys = [
+          ['Rotates old log files. This job was retired last year.', 'Log rotation is turned off. There is nothing to do.'],
+          ['Old cleanup task that is no longer used.', 'This script is out of date and does nothing.'],
+          ['Prints a friendly greeting.', 'Hello! This script does not open any doors.'],
+          ['Checks the printer queue.', 'The printer queue is empty.'],
+          ['Backs up the music folder.', 'There is no music folder to back up.'],
+        ];
+        const kids = {};
+        for (const n of names) {
+          if (n === calib) {
+            kids[n] = file(`#!/bin/bash\n# Calibrates the door sensors before the decoder can run.\necho "Calibrating the door sensors... done."\ntouch ~/tools/.calibrated\necho "Now make decode.sh executable with chmod and run it."\n`, {
+              mode: 0o755,
+              run(sh) {
+                const tl = sh.look(`${HOME}/tools`);
+                if (!tl.err && tl.node.t === 'd') tl.node.kids['.calibrated'] = sh.stampNew(file(''));
+                return 'Calibrating the door sensors... done.\nNow make decode.sh executable with chmod and run it.\n';
+              },
+            });
+          } else {
+            const [c, m] = t.pick(decoys);
+            kids[n] = file(`#!/bin/bash\n# ${c}\necho "${m}"\n`);
+          }
+        }
+        kids['decode.sh'] = file(`#!/bin/bash\n# Prints the door code, but only after the sensors are calibrated.\nif [ ! -f ~/tools/.calibrated ]; then\n  echo "Error: the sensors are not calibrated. Run the calibration script first."\n  exit 1\nfi\necho "FLAG=$(echo ${b64(code)} | base64 -d)"\n`, {
+          run(sh) {
+            const ok = !sh.look(`${HOME}/tools/.calibrated`).err;
+            return ok ? `FLAG=${code}\n` : 'Error: the sensors are not calibrated. Run the calibration script first.\n';
+          },
+        });
+        kids['readme.txt'] = file('Only one of these scripts is ready to run. Start with that one.\n');
+        return {
+          code,
+          home: { tools: dir(kids) },
+          mission: `Exactly one of the scripts in <code>tools</code> is already executable. Find it with <code>ls -l</code> and run it. It will tell you what to do next.`,
+          hints: [
+            'Type cd tools and then ls -l. Look for the file whose permissions contain an x.',
+            `The executable script is ${calib}. Run it by typing ./${calib}.`,
+            'Type chmod +x decode.sh and then ./decode.sh to print the code.',
+          ],
+          solution: ['cd tools', 'ls -l', `./${calib}`, './decode.sh', 'chmod +x decode.sh', './decode.sh', `submit ${code}`],
+          evidence: [`FLAG=${code}`, 'Permission denied'],
+        };
+      },
+    },
+    {
+      title: 'The great escape',
+      lesson: `<p>This final level uses many of the skills you have learned: reading files, hidden files, <code>find</code>, <code>grep -r</code> and <code>chmod</code>.</p><p>Start by reading the briefing, and take it one step at a time.</p>`,
+      learned: 'You combined find, grep -r, cat and chmod to solve a problem in several steps.',
+      build(t) {
+        const p1 = t.code(2), p2 = t.code(2), p3 = t.code(2);
+        const vault = {}, leaves = [];
+        for (const a of t.shuffle(WORDS).slice(0, 4)) {
+          vault[a] = dir();
+          for (const s of t.shuffle(WORDS).slice(0, 3)) {
+            const d = vault[a].kids[s] = dir();
+            leaves.push([`mission/vault/${a}/${s}`, d]);
+            for (let i = 0; i < t.int(2, 4); i++) d.kids[t.pick(WORDS) + t.pick(['.txt', '.dat', '.bak'])] = file('Nothing useful is stored in this file.\n');
+          }
+        }
+        const [pd, pn] = t.pick(leaves);
+        const partName = `.${t.pick(WORDS)}.part`;
+        pn.kids[partName] = file(`PART1=${p1}\n`);
+        const logs = {};
+        const logNames = ['auth.log', 'kern.log', 'app.log', 'db.log', 'cron.log'];
+        const target = t.pick(logNames);
+        for (const n of logNames) {
+          const ls = logLines(t, 150, t.int(0, 20));
+          if (n === target) ls.splice(t.int(10, 140), 0, `PART2=${p2}`);
+          logs[n] = file(joinLines(ls));
+        }
+        return {
+          code: p1 + p2 + p3,
+          home: {
+            mission: dir({
+              'briefing.txt': file(`Final briefing\n\nThe final code has three parts. Submit them together in order, like submit AB12CD.\n\nPart 1 is in a file whose name ends in .part. It is hidden somewhere under mission/vault.\nPart 2 is on a line that starts with PART2= in one of the files in mission/logs.\nPart 3 is printed by the script mission/bin/finish.sh, which is not executable yet.\n`),
+              vault: dir(vault), logs: dir(logs),
+              bin: dir({
+                'finish.sh': file(`#!/bin/bash\n# Prints the third part of the final code.\necho "PART3=$(echo ${b64(p3)} | base64 -d)"\n`, { run: () => `PART3=${p3}\n` }),
+              }),
+            }),
+          },
+          mission: `Read <code>mission/briefing.txt</code>. It explains where the three parts of the final code are hidden.`,
+          hints: [
+            'Use find with -name "*.part" to find part 1, grep -r PART2 for part 2, and chmod +x for part 3.',
+            'Type find mission/vault -name "*.part" and then grep -r PART2 mission/logs.',
+            'For part 3, type chmod +x mission/bin/finish.sh and then ./mission/bin/finish.sh.',
+          ],
+          solution: ['cat mission/briefing.txt', 'find mission/vault -name "*.part"', `cat ${pd}/${partName}`, 'grep -r PART2 mission/logs', 'chmod +x mission/bin/finish.sh', './mission/bin/finish.sh', `submit ${p1 + p2 + p3}`],
+          evidence: [`PART1=${p1}`, `PART2=${p2}`, `PART3=${p3}`, `${pd}/${partName}`],
+        };
+      },
+    },
+  ];
+
+  class Shell {
+    constructor(levelIndex, seed, history = []) {
+      const L = LEVELS[levelIndex];
+      const rng = mkRng(seed);
+      this.t = tools(rng);
+      const spec = L.build(this.t);
+      this.level = { ...L, ...spec, index: levelIndex };
+      this.root = baseFS();
+      Object.assign(this.root.kids.home.kids.player.kids, spec.home);
+      for (const [p, node] of Object.entries(spec.mount || {})) {
+        const parts = p.split('/').filter(Boolean);
+        let d = this.root;
+        for (const part of parts.slice(0, -1)) d = (d.kids[part] ||= dir());
+        d.kids[parts[parts.length - 1]] = node;
+      }
+      this.stamp(this.root, '');
+      this.cwd = spec.cwd || HOME;
+      this.oldpwd = '';
+      this.history = history;
+      this.status = 0;
+      this.hintsUsed = 0;
+      this.cols = 80;
+      this.depth = 0;
+      this.script = null;
+      this.solved = false;
+    }
+    date() {
+      const t = this.t, off = t.int(0, 20);
+      const [mon, day] = off <= 15 ? [8, 15 + off] : [9, off - 15];
+      return `${MONTHS[mon]} ${String(day).padStart(2)} ${String(t.int(7, 22)).padStart(2, '0')}:${String(t.int(0, 59)).padStart(2, '0')}`;
+    }
+    stamp(node, path) {
+      node.own = (path === HOME || path.startsWith(HOME + '/')) ? 'player' : 'root';
+      node.mt ||= this.date();
+      if (node.t === 'd') for (const [n, k] of Object.entries(node.kids)) this.stamp(k, `${path}/${n}`);
+    }
+    stampNew(node) { node.own = 'player'; node.mt = 'Oct  6 10:02'; return node; }
+    promptPath() { return this.cwd === HOME ? '~' : this.cwd.startsWith(HOME + '/') ? '~' + this.cwd.slice(HOME.length) : this.cwd; }
+    getVar(n) { return { HOME, USER: 'player', PWD: this.cwd, OLDPWD: this.oldpwd, SHELL: '/bin/bash', '?': String(this.status) }[n] ?? ''; }
+    pfx() { return this.script ? `${this.script.name}: line ${this.script.line}: ` : 'bash: '; }
+
+    look(p) {
+      if (!p) return { err: 'No such file or directory' };
+      const parts = (p.startsWith('/') ? p : this.cwd + '/' + p).split('/');
+      const stack = [['', this.root]];
+      for (const part of parts) {
+        if (part === '') continue;
+        const top = stack[stack.length - 1][1];
+        if (top.t !== 'd') return { err: 'Not a directory' };
+        if (part === '.') continue;
+        if (part === '..') { if (stack.length > 1) stack.pop(); continue; }
+        const kid = top.kids[part];
+        if (!kid) return { err: 'No such file or directory' };
+        stack.push([part, kid]);
+      }
+      const node = stack[stack.length - 1][1];
+      if (p.endsWith('/') && node.t !== 'd') return { err: 'Not a directory' };
+      return { node, path: '/' + stack.slice(1).map(s => s[0]).join('/'), name: stack[stack.length - 1][0], parent: stack.length > 1 ? stack[stack.length - 2][1] : this.root };
+    }
+    canRead(n) { return n.own === 'player' ? n.mode & 0o400 : n.mode & 0o004; }
+
+    // ----- parsing -----
+    tokenize(line) {
+      const toks = [];
+      let w = null;
+      const start = () => { if (!w) w = { v: '', pat: '', glob: false }; };
+      const end = () => { if (w) { toks.push({ t: 'w', ...w }); w = null; } };
+      const lit = s => { start(); w.v += s; w.pat += s.replace(/[*?[\]\\]/g, '\\$&'); };
+      const raw = s => { start(); w.v += s; w.pat += s; if ('*?['.includes(s)) w.glob = true; };
+      const varAt = j => {
+        const m = /^\$(?:\{(\w+)\}|(\w+)|(\?))/.exec(line.slice(j));
+        return m ? [this.getVar(m[1] || m[2] || m[3]), j + m[0].length] : null;
+      };
+      let i = 0;
+      while (i < line.length) {
+        const ch = line[i];
+        if (ch === ' ' || ch === '\t') { end(); i++; continue; }
+        if (ch === '#' && !w) break;
+        if (ch === '\\') { if (i + 1 < line.length) lit(line[i + 1]); i += 2; continue; }
+        if (ch === "'") {
+          const j = line.indexOf("'", i + 1);
+          if (j < 0) return { error: "unexpected EOF while looking for matching `''" };
+          lit(line.slice(i + 1, j)); i = j + 1; continue;
+        }
+        if (ch === '"') {
+          let j = i + 1, s = '';
+          while (j < line.length && line[j] !== '"') {
+            if (line[j] === '\\' && j + 1 < line.length && '"\\$`'.includes(line[j + 1])) { s += line[j + 1]; j += 2; continue; }
+            if (line[j] === '$') { const r = varAt(j); if (r) { s += r[0]; j = r[1]; continue; } }
+            s += line[j]; j++;
+          }
+          if (j >= line.length) return { error: 'unexpected EOF while looking for matching `"\'' };
+          lit(s); i = j + 1; continue;
+        }
+        if (ch === '$') { const r = varAt(i); if (r) { lit(r[0]); i = r[1]; continue; } }
+        if (ch === '~' && !w && (i + 1 >= line.length || ' \t/|;&'.includes(line[i + 1]))) { lit(HOME); i++; continue; }
+        if ('|;&<>'.includes(ch)) {
+          end();
+          const two = line.slice(i, i + 2);
+          if (two === '&&' || two === '||' || two === '>>') { toks.push({ t: 'op', v: two }); i += 2; continue; }
+          toks.push({ t: 'op', v: ch }); i++; continue;
+        }
+        raw(ch); i++;
+      }
+      end();
+      return { toks };
+    }
+    parse(toks) {
+      const items = [];
+      let pipe = [], cmd = [], joiner = null;
+      for (const t of toks) {
+        if (t.t === 'w') { cmd.push(t); continue; }
+        if (['<', '>', '>>'].includes(t.v)) return { error: 'Redirecting input or output with <, > or >> is not supported in this practice shell.', plain: true };
+        if (t.v === '&') return { error: 'Running commands in the background with & is not supported in this practice shell.', plain: true };
+        if (!cmd.length) return { error: `syntax error near unexpected token \`${t.v}'` };
+        pipe.push(cmd); cmd = [];
+        if (t.v === '|') continue;
+        items.push({ joiner, pipe }); pipe = []; joiner = t.v;
+      }
+      if (cmd.length) pipe.push(cmd);
+      else if (pipe.length || (joiner && joiner !== ';')) return { error: 'syntax error: unexpected end of file' };
+      if (pipe.length) items.push({ joiner, pipe });
+      return { items };
+    }
+    expandGlob(pat) {
+      const abs = pat.startsWith('/');
+      const segs = pat.split('/').filter((s, i) => s !== '' || i === 0);
+      let cands = [abs ? '/' : ''];
+      for (let k = abs ? 1 : 0; k < segs.length; k++) {
+        const seg = segs[k];
+        const next = [];
+        for (const base of cands) {
+          const r = this.look(base || '.');
+          if (r.err || r.node.t !== 'd') continue;
+          const join = n => base === '' ? n : base === '/' ? '/' + n : base + '/' + n;
+          if (hasGlob(seg)) {
+            const re = globRe(seg);
+            const dotOk = seg.startsWith('.');
+            for (const n of Object.keys(r.node.kids).sort(cmpName)) if ((dotOk || !n.startsWith('.')) && re.test(n)) next.push(join(n));
+          } else {
+            const n = seg.replace(/\\(.)/g, '$1');
+            if (n === '.' || n === '..' || r.node.kids[n]) next.push(join(n));
+          }
+        }
+        cands = next;
+      }
+      return cands.filter(c => c !== '' && c !== '/' || pat === '/');
+    }
+    expand(words) {
+      const out = [];
+      for (const w of words) {
+        if (w.glob && hasGlob(w.pat)) {
+          const m = this.expandGlob(w.pat);
+          if (m.length) { out.push(...m); continue; }
+        }
+        out.push(w.v);
+      }
+      return out;
+    }
+
+    // ----- running -----
+    run(line) {
+      const res = { out: [], clear: false, solved: false };
+      this.res = res;
+      this.sink = (text, err) => res.out.push({ text: err ? text + '\n' : text, err });
+      this.runLine(line);
+      res.solved = this.solved;
+      return res;
+    }
+    runLine(line) {
+      if (!line.trim()) return;
+      const tk = this.tokenize(line);
+      if (tk.error) { this.sink(`${this.pfx()}${tk.error}`, true); this.status = 2; return; }
+      if (!tk.toks.length) return;
+      const ps = this.parse(tk.toks);
+      if (ps.error) { this.sink(ps.plain ? ps.error : `${this.pfx()}${ps.error}`, true); this.status = 2; return; }
+      for (const it of ps.items) {
+        if (it.joiner === '&&' && this.status !== 0) continue;
+        if (it.joiner === '||' && this.status === 0) continue;
+        this.status = this.runPipeline(it.pipe);
+        if (this.solved) break;
+      }
+    }
+    runPipeline(pipe) {
+      let stdin = null, status = 0;
+      pipe.forEach((words, idx) => {
+        const args = this.expand(words);
+        const c = { stdin, tty: idx === pipe.length - 1, out: '', errs: [] };
+        status = this.exec(args, c);
+        c.errs.forEach(e => this.sink(e, true));
+        stdin = c.out;
+        if (c.tty && c.out) this.sink(c.out, false);
+      });
+      return status;
+    }
+    exec(args, c) {
+      if (!args.length) return 0;
+      const [name, ...rest] = args;
+      if (name.includes('/')) return this.runFile(name, c);
+      if (!COMMANDS.includes(name)) { c.errs.push(`${this.pfx()}${name}: command not found`); return 127; }
+      if (rest.includes('--help') && USAGE[name]) { c.out += USAGE[name] + '\n'; return 0; }
+      const r = this['c_' + name](rest, c);
+      return r || 0;
+    }
+    runFile(p, c) {
+      const r = this.look(p), pre = this.pfx();
+      if (r.err) { c.errs.push(`${pre}${p}: ${r.err}`); return 127; }
+      if (r.node.t === 'd') { c.errs.push(`${pre}${p}: Is a directory`); return 126; }
+      if (!(r.node.mode & 0o100)) { c.errs.push(`${pre}${p}: Permission denied`); return 126; }
+      if (r.node.run) { c.out += r.node.run(this, r); return 0; }
+      if (this.depth > 3) return 0;
+      const saved = [this.script, this.sink];
+      this.depth++;
+      this.sink = (text, err) => { if (err) c.errs.push(text); else c.out += text; };
+      linesOf(r.node.content).forEach((ln, k) => {
+        if (!ln.trim() || ln.trim().startsWith('#')) return;
+        this.script = { name: p, line: k + 1 };
+        this.runLine(ln);
+      });
+      [this.script, this.sink] = saved;
+      this.depth--;
+      return 0;
+    }
+
+    opts(name, args, c, flags, withArg = '') {
+      const o = {}, rest = [];
+      let done = false;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (done || a === '-' || !a.startsWith('-')) { rest.push(a); continue; }
+        if (a === '--') { done = true; continue; }
+        if (a.startsWith('--')) { this.bad(c, name, `unrecognized option '${a}'`); return null; }
+        for (let j = 1; j < a.length; j++) {
+          const f = a[j];
+          if (withArg.includes(f)) {
+            let v = a.slice(j + 1);
+            if (!v) { if (i + 1 >= args.length) { this.bad(c, name, `option requires an argument -- '${f}'`); return null; } v = args[++i]; }
+            o[f] = v;
+            break;
+          }
+          if (!flags.includes(f)) { this.bad(c, name, `invalid option -- '${f}'`); return null; }
+          o[f] = true;
+        }
+      }
+      return { o, rest };
+    }
+    bad(c, name, msg) {
+      c.errs.push(`${name}: ${msg}`);
+      if (name === 'grep') c.errs.push(USAGE.grep);
+      c.errs.push(`Try '${name} --help' for more information.`);
+    }
+    readIn(name, op, c) {
+      if (op === '-') return c.stdin ?? '';
+      const r = this.look(op);
+      let err = r.err;
+      if (!err && r.node.t === 'd') err = 'Is a directory';
+      else if (!err && !this.canRead(r.node)) err = 'Permission denied';
+      if (!err) return r.node.content;
+      const isDir = err === 'Is a directory';
+      const msg = {
+        head: isDir ? `head: error reading '${op}': ${err}` : `head: cannot open '${op}' for reading: ${err}`,
+        tail: isDir ? `tail: error reading '${op}': ${err}` : `tail: cannot open '${op}' for reading: ${err}`,
+        sort: isDir ? `sort: read failed: ${op}: ${err}` : `sort: cannot read: ${op}: ${err}`,
+      }[name] || `${name}: ${op}: ${err}`;
+      c.errs.push(msg);
+      return null;
+    }
+
+    // ----- commands -----
+    c_pwd(a, c) { c.out += this.cwd + '\n'; }
+    c_whoami(a, c) { c.out += 'player\n'; }
+    c_exit(a, c) { c.out += 'This practice shell cannot be closed. Find the code to finish the level.\n'; }
+    c_help(a, c) { c.out += HELP; }
+    c_clear() { this.res.clear = true; }
+    c_history(a, c) { c.out += this.history.map((h, i) => `${String(i + 1).padStart(5)}  ${h}`).join('\n') + (this.history.length ? '\n' : ''); }
+    c_hint(a, c) {
+      const h = this.level.hints, i = Math.min(this.hintsUsed, h.length - 1);
+      c.out += `Hint ${i + 1} of ${h.length}: ${h[i]}\n`;
+      if (this.hintsUsed < h.length) this.hintsUsed++;
+    }
+    c_submit(args, c) {
+      if (!args.length) { c.errs.push('submit: missing code. Type submit followed by the code, for example submit AB12.'); return 1; }
+      const norm = s => s.trim().replace(/^flag\s*[=:]\s*/i, '').toUpperCase();
+      if (norm(args.join(' ')) === norm(this.level.code)) {
+        c.out += 'Access granted. The door slides open.\n';
+        this.solved = true;
+        return 0;
+      }
+      c.out += `Access denied. ${args.join(' ')} is not the right code. Keep looking, or type hint for a clue.\n`;
+      return 1;
+    }
+    c_echo(args, c) {
+      let nl = true, e = false;
+      while (args.length && /^-[neE]+$/.test(args[0])) { const f = args.shift(); if (f.includes('n')) nl = false; if (f.includes('e')) e = true; if (f.includes('E')) e = false; }
+      let s = args.join(' ');
+      if (e) s = s.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\\\/g, '\\');
+      c.out += s + (nl ? '\n' : '');
+    }
+    c_cd(args, c) {
+      args = args.filter(a => a !== '-L' && a !== '-P' && a !== '--');
+      const pre = this.pfx();
+      if (args.length > 1) { c.errs.push(`${pre}cd: too many arguments`); return 1; }
+      let tgt = args[0], print = false;
+      if (tgt === undefined) tgt = HOME;
+      if (tgt === '') return 0;
+      if (tgt === '-') {
+        if (!this.oldpwd) { c.errs.push(`${pre}cd: OLDPWD not set`); return 1; }
+        tgt = this.oldpwd; print = true;
+      }
+      const r = this.look(tgt);
+      const err = r.err || (r.node.t !== 'd' ? 'Not a directory' : null);
+      if (err) { c.errs.push(`${pre}cd: ${args[0]}: ${err}`); return 1; }
+      this.oldpwd = this.cwd;
+      this.cwd = r.path;
+      if (print) c.out += this.cwd + '\n';
+      return 0;
+    }
+    c_ls(args, c) {
+      const p = this.opts('ls', args, c, 'aAl1dh');
+      if (!p) return 2;
+      const { o, rest } = p;
+      const ops = rest.length ? rest : ['.'];
+      let st = 0;
+      const files = [], dirs = [];
+      for (const op of ops) {
+        const r = this.look(op);
+        if (r.err) { c.errs.push(`ls: cannot access '${op}': ${r.err}`); st = 2; continue; }
+        (r.node.t === 'd' && !o.d ? dirs : files).push({ name: op, node: r.node });
+      }
+      const sorter = (a, b) => cmpName(a.name, b.name);
+      files.sort(sorter); dirs.sort(sorter);
+      const blocks = [];
+      if (files.length) blocks.push(this.fmtEntries(files, o, c, false));
+      for (const d of dirs) {
+        let ents = Object.entries(d.node.kids).filter(([n]) => o.a || o.A || !n.startsWith('.')).map(([name, node]) => ({ name, node }));
+        ents.sort(sorter);
+        if (o.a) ents = [{ name: '.', node: d.node }, { name: '..', node: this.look(d.name.replace(/\/*$/, '') + '/..').node || d.node }, ...ents];
+        blocks.push((ops.length > 1 ? `${d.name}:\n` : '') + this.fmtEntries(ents, o, c, true));
+      }
+      c.out += blocks.join('\n');
+      return st;
+    }
+    perm(n) {
+      let s = n.t === 'd' ? 'd' : '-';
+      for (const sh of [6, 3, 0]) s += (n.mode >> sh & 4 ? 'r' : '-') + (n.mode >> sh & 2 ? 'w' : '-') + (n.mode >> sh & 1 ? 'x' : '-');
+      if (n.mode & 0o1000) s = s.slice(0, 9) + (n.mode & 1 ? 't' : 'T');
+      return s;
+    }
+    deco(name, node, tty) {
+      if (node.t === 'd') return paint('d', name, tty);
+      if (node.mode & 0o111) return paint('x', name, tty);
+      return name;
+    }
+    fmtEntries(ents, o, c, isDir) {
+      if (!ents.length) return isDir && o.l ? 'total 0\n' : '';
+      if (o.l) {
+        const size = n => n.t === 'd' ? 4096 : n.content.length;
+        const links = n => n.t === 'd' ? 2 + Object.values(n.kids).filter(k => k.t === 'd').length : 1;
+        const lw = Math.max(...ents.map(e => String(links(e.node)).length));
+        const ow = Math.max(...ents.map(e => e.node.own.length));
+        const sw = Math.max(...ents.map(e => String(size(e.node)).length));
+        const out = [];
+        if (isDir) out.push(`total ${ents.reduce((s, e) => s + (e.node.t === 'd' ? 4 : Math.ceil(size(e.node) / 4096) * 4), 0)}`);
+        for (const e of ents) out.push(`${this.perm(e.node)} ${String(links(e.node)).padStart(lw)} ${e.node.own.padEnd(ow)} ${e.node.own.padEnd(ow)} ${String(size(e.node)).padStart(sw)} ${e.node.mt} ${this.deco(e.name, e.node, c.tty)}`);
+        return joinLines(out);
+      }
+      if (!c.tty || o['1']) return joinLines(ents.map(e => e.name));
+      const n = ents.length, width = this.cols;
+      for (let rows = 1; rows <= n; rows++) {
+        const ncol = Math.ceil(n / rows), widths = [];
+        for (let col = 0; col < ncol; col++) {
+          let w = 0;
+          for (let r = 0; r < rows; r++) { const k = col * rows + r; if (k < n) w = Math.max(w, ents[k].name.length); }
+          widths.push(w);
+        }
+        if (widths.reduce((a, b) => a + b, 0) + 2 * (ncol - 1) <= width || rows === n) {
+          const lines = [];
+          for (let r = 0; r < rows; r++) {
+            let s = '';
+            for (let col = 0; col < ncol; col++) {
+              const k = col * rows + r;
+              if (k >= n) continue;
+              const e = ents[k];
+              s += this.deco(e.name, e.node, true);
+              if ((col + 1) * rows + r < n) s += ' '.repeat(widths[col] - e.name.length + 2);
+            }
+            lines.push(s);
+          }
+          return joinLines(lines);
+        }
+      }
+      return '';
+    }
+    c_cat(args, c) {
+      const p = this.opts('cat', args, c, 'n');
+      if (!p) return 1;
+      let st = 0, n = 0;
+      for (const op of (p.rest.length ? p.rest : ['-'])) {
+        const t = this.readIn('cat', op, c);
+        if (t === null) { st = 1; continue; }
+        c.out += p.o.n ? joinLines(linesOf(t).map(l => `${String(++n).padStart(6)}\t${l}`)) : t;
+      }
+      return st;
+    }
+    headTail(name, args, c) {
+      args = args.flatMap((a, i) => /^-\d+$/.test(a) && args[i - 1] !== '-n' ? ['-n', a.slice(1)] : [a]);
+      const p = this.opts(name, args, c, 'qv', 'n');
+      if (!p) return 1;
+      let n = 10, fromStart = false, allBut = false;
+      if (p.o.n !== undefined) {
+        const m = /^([+-]?)(\d+)$/.exec(p.o.n);
+        if (!m) { c.errs.push(`${name}: invalid number of lines: ‘${p.o.n}’`); return 1; }
+        n = +m[2];
+        if (name === 'head' && m[1] === '-') allBut = true;
+        if (name === 'tail' && m[1] === '+') fromStart = true;
+      }
+      const ops = p.rest.length ? p.rest : ['-'];
+      let st = 0, shown = 0;
+      for (const op of ops) {
+        const t = this.readIn(name, op, c);
+        if (t === null) { st = 1; continue; }
+        if ((ops.length > 1 && !p.o.q) || p.o.v) c.out += `${shown ? '\n' : ''}==> ${op === '-' ? 'standard input' : op} <==\n`;
+        shown++;
+        const ls = linesOf(t);
+        const sel = name === 'head'
+          ? (allBut ? ls.slice(0, Math.max(0, ls.length - n)) : ls.slice(0, n))
+          : (fromStart ? ls.slice(Math.max(0, n - 1)) : n === 0 ? [] : ls.slice(-n));
+        c.out += joinLines(sel);
+      }
+      return st;
+    }
+    c_head(a, c) { return this.headTail('head', a, c); }
+    c_tail(a, c) { return this.headTail('tail', a, c); }
+    walk(node, prefix, fn) {
+      for (const n of Object.keys(node.kids).sort(cmpName)) {
+        const k = node.kids[n];
+        const path = prefix === '' ? n : prefix === '/' ? '/' + n : prefix.replace(/\/+$/, '') + '/' + n;
+        fn(path, k);
+        if (k.t === 'd') this.walk(k, path, fn);
+      }
+    }
+    c_grep(args, c) {
+      const p = this.opts('grep', args, c, 'irRnvcElwhHs');
+      if (!p) return 2;
+      const o = p.o;
+      if (o.R) o.r = true;
+      const [pat, ...files] = p.rest;
+      if (pat === undefined) { c.errs.push(USAGE.grep, "Try 'grep --help' for more information."); return 2; }
+      let src = o.E ? pat : breToJs(pat);
+      if (o.w) src = `(?<![A-Za-z0-9_])(?:${src})(?![A-Za-z0-9_])`;
+      let re, reG;
+      try { re = new RegExp(src, o.i ? 'i' : ''); reG = new RegExp(src, o.i ? 'gi' : 'g'); } catch { c.errs.push('grep: Invalid regular expression'); return 2; }
+      const ops = files.length ? files : (o.r ? ['.'] : ['-']);
+      const implicit = !files.length && o.r;
+      const targets = [];
+      let bad = false, anyDir = false;
+      for (const op of ops) {
+        if (op === '-') { targets.push({ label: '(standard input)', text: c.stdin ?? '' }); continue; }
+        const r = this.look(op);
+        if (r.err) { if (!o.s) c.errs.push(`grep: ${op}: ${r.err}`); bad = true; continue; }
+        if (r.node.t === 'd') {
+          if (!o.r) { if (!o.s) c.errs.push(`grep: ${op}: Is a directory`); bad = true; continue; }
+          anyDir = true;
+          this.walk(r.node, implicit ? '' : op, (path, node) => { if (node.t === 'f') targets.push({ label: path, node }); });
+        } else targets.push({ label: op, node: r.node });
+      }
+      const showName = o.H || (!o.h && (ops.length > 1 || anyDir));
+      const tty = c.tty;
+      let found = false;
+      for (const tg of targets) {
+        let text = tg.text;
+        if (tg.node) {
+          if (!this.canRead(tg.node)) { c.errs.push(`grep: ${tg.label}: Permission denied`); bad = true; continue; }
+          text = tg.node.content;
+        }
+        const name = showName ? paint('f', tg.label, tty) + paint('s', ':', tty) : '';
+        let count = 0;
+        linesOf(text).forEach((line, k) => {
+          if (re.test(line) === !!o.v) return;
+          count++;
+          if (o.c || o.l) return;
+          const body = tty && !o.v ? line.replace(reG, m => m ? paint('m', m, true) : m) : line;
+          c.out += name + (o.n ? paint('n', String(k + 1), tty) + paint('s', ':', tty) : '') + body + '\n';
+        });
+        if (count) found = true;
+        if (o.l && count) c.out += paint('f', tg.label, tty) + '\n';
+        else if (o.c && !o.l) c.out += name + count + '\n';
+      }
+      return bad ? 2 : found ? 0 : 1;
+    }
+    c_find(args, c) {
+      let i = 0;
+      const paths = [];
+      while (i < args.length && !(args[i].startsWith('-') && args[i].length > 1) && args[i] !== '!' && args[i] !== '(') paths.push(args[i++]);
+      if (!paths.length) paths.push('.');
+      const tests = [];
+      let prev = null, maxd = Infinity, mind = 0;
+      while (i < args.length) {
+        const a = args[i++];
+        const need = () => { if (i >= args.length) { c.errs.push(`find: missing argument to ‘${a}’`); return null; } return args[i++]; };
+        if (a === '-name' || a === '-iname') {
+          const v = need(); if (v === null) return 1;
+          const re = globRe(v, a === '-iname' ? 'i' : '');
+          tests.push(e => re.test(e.name)); prev = a; continue;
+        }
+        if (a === '-type') {
+          const v = need(); if (v === null) return 1;
+          if (!['f', 'd', 'l', 'b', 'c', 'p', 's'].includes(v)) { c.errs.push(`find: Unknown argument to -type: ${v}`); return 1; }
+          tests.push(e => e.node.t === v); prev = a; continue;
+        }
+        if (a === '-maxdepth' || a === '-mindepth') {
+          const v = need(); if (v === null) return 1;
+          if (!/^\d+$/.test(v)) { c.errs.push(`find: Expected a positive decimal integer argument to ${a}, but got ‘${v}’`); return 1; }
+          if (a === '-maxdepth') maxd = +v; else mind = +v;
+          continue;
+        }
+        if (a === '-print') continue;
+        if (!a.startsWith('-')) {
+          c.errs.push(`find: paths must precede expression: ‘${a}’`);
+          if (prev === '-name' || prev === '-iname') c.errs.push(`find: possible unquoted pattern after predicate ‘${prev}’?`);
+          return 1;
+        }
+        c.errs.push(`find: unknown predicate ‘${a}’`);
+        return 1;
+      }
+      let st = 0;
+      const visit = (path, name, node, depth) => {
+        if (depth >= mind && tests.every(t => t({ name, node }))) c.out += path + '\n';
+        if (node.t === 'd' && depth < maxd) {
+          for (const n of Object.keys(node.kids).sort(cmpName)) {
+            const child = path === '/' ? '/' + n : path.replace(/\/+$/, '') + '/' + n;
+            visit(child, n, node.kids[n], depth + 1);
+          }
+        }
+      };
+      for (const p of paths) {
+        const r = this.look(p);
+        if (r.err) { c.errs.push(`find: ‘${p}’: ${r.err}`); st = 1; continue; }
+        visit(p, p.replace(/\/+$/, '').split('/').pop() || '/', r.node, 0);
+      }
+      return st;
+    }
+    c_wc(args, c) {
+      const p = this.opts('wc', args, c, 'lwcm');
+      if (!p) return 1;
+      const o = p.o;
+      const sel = (o.l || o.w || o.c || o.m) ? [o.l, o.w, o.c || o.m] : [true, true, true];
+      const ops = p.rest.length ? p.rest : [null];
+      const rows = [];
+      let st = 0, stdin = false;
+      for (const op of ops) {
+        let text;
+        if (op === null || op === '-') { text = c.stdin ?? ''; stdin = true; }
+        else {
+          const r = this.look(op);
+          if (r.err) { c.errs.push(`wc: ${op}: ${r.err}`); st = 1; continue; }
+          if (r.node.t === 'd') { c.errs.push(`wc: ${op}: Is a directory`); rows.push({ v: [0, 0, 0], name: op }); st = 1; continue; }
+          text = r.node.content;
+        }
+        rows.push({ v: [(text.match(/\n/g) || []).length, text.split(/\s+/).filter(Boolean).length, text.length], name: op });
+      }
+      if (rows.length > 1) rows.push({ v: [0, 1, 2].map(k => rows.reduce((s, r) => s + r.v[k], 0)), name: 'total' });
+      const fields = sel.filter(Boolean).length;
+      const width = fields === 1 && rows.length === 1 ? 1 : stdin ? 7 : String(rows.reduce((s, r) => r.name === 'total' ? s : s + r.v[2], 0)).length;
+      for (const r of rows) c.out += r.v.filter((_, k) => sel[k]).map(v => String(v).padStart(width)).join(' ') + (r.name !== null ? ' ' + r.name : '') + '\n';
+      return st;
+    }
+    c_sort(args, c) {
+      const p = this.opts('sort', args, c, 'nruf');
+      if (!p) return 2;
+      const o = p.o;
+      let lines = [];
+      let st = 0;
+      for (const op of (p.rest.length ? p.rest : ['-'])) {
+        const t = this.readIn('sort', op, c);
+        if (t === null) { st = 2; continue; }
+        lines = lines.concat(linesOf(t));
+      }
+      if (st) return st;
+      const num = s => { const m = /^\s*(-?\d*\.?\d+)/.exec(s); return m ? parseFloat(m[1]) : 0; };
+      const key = (a, b) => o.n ? num(a) - num(b) : o.f ? collator.compare(a.toLowerCase(), b.toLowerCase()) : collator.compare(a, b);
+      const cmp = (a, b) => { const k = key(a, b); if (k || o.u) return k; return o.n ? collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0) : (a < b ? -1 : a > b ? 1 : 0); };
+      lines.sort((a, b) => o.r ? cmp(b, a) : cmp(a, b));
+      if (o.u) lines = lines.filter((l, i) => i === 0 || key(lines[i - 1], l) !== 0);
+      c.out += joinLines(lines);
+      return 0;
+    }
+    c_uniq(args, c) {
+      const p = this.opts('uniq', args, c, 'cdui');
+      if (!p) return 1;
+      if (p.rest.length > 1) { c.errs.push('uniq: writing to an output file is not supported in this practice shell.'); return 1; }
+      const t = this.readIn('uniq', p.rest[0] ?? '-', c);
+      if (t === null) return 1;
+      const eq = (a, b) => p.o.i ? a.toLowerCase() === b.toLowerCase() : a === b;
+      const groups = [];
+      for (const l of linesOf(t)) {
+        const g = groups[groups.length - 1];
+        if (g && eq(g.line, l)) g.n++; else groups.push({ line: l, n: 1 });
+      }
+      for (const g of groups) {
+        if (p.o.d && g.n < 2) continue;
+        if (p.o.u && g.n > 1) continue;
+        c.out += (p.o.c ? `${String(g.n).padStart(7)} ` : '') + g.line + '\n';
+      }
+      return 0;
+    }
+    parseMode(m) {
+      if (/^[0-7]{1,4}$/.test(m)) { const v = parseInt(m, 8); return () => v; }
+      const clauses = [];
+      for (const cl of m.split(',')) {
+        const mm = /^([ugoa]*)((?:[+=-][rwxX]*)+)$/.exec(cl);
+        if (!mm) return null;
+        clauses.push([mm[1], [...mm[2].matchAll(/([+=-])([rwxX]*)/g)].map(x => [x[1], x[2]])]);
+      }
+      return (mode, isDir) => {
+        for (const [who, ops] of clauses) {
+          let wmask = 0;
+          for (const w of who || 'a') wmask |= { u: 0o700, g: 0o070, o: 0o007, a: 0o777 }[w];
+          const umask = who ? 0 : 0o022;
+          for (const [op, perms] of ops) {
+            let b = 0;
+            for (const ch of perms) b |= ch === 'r' ? 4 : ch === 'w' ? 2 : ch === 'x' ? 1 : (isDir || mode & 0o111) ? 1 : 0;
+            const full = (b << 6 | b << 3 | b) & wmask & ~umask;
+            if (op === '+') mode |= full;
+            else if (op === '-') mode &= ~full;
+            else mode = (mode & ~wmask) | full;
+          }
+        }
+        return mode;
+      };
+    }
+    c_chmod(args, c) {
+      const rest = [...args];
+      if (rest[0] === '-R' || rest[0] === '-v' || rest[0] === '--') rest.shift();
+      const tryMsg = "Try 'chmod --help' for more information.";
+      if (!rest.length) { c.errs.push('chmod: missing operand', tryMsg); return 1; }
+      const mode = rest.shift();
+      if (!rest.length) { c.errs.push(`chmod: missing operand after ‘${mode}’`, tryMsg); return 1; }
+      const fn = this.parseMode(mode);
+      if (!fn) { c.errs.push(`chmod: invalid mode: ‘${mode}’`, tryMsg); return 1; }
+      let st = 0;
+      for (const f of rest) {
+        const r = this.look(f);
+        if (r.err) { c.errs.push(`chmod: cannot access '${f}': ${r.err}`); st = 1; continue; }
+        if (r.node.own !== 'player') { c.errs.push(`chmod: changing permissions of '${f}': Operation not permitted`); st = 1; continue; }
+        r.node.mode = (r.node.mode & 0o1000) | (fn(r.node.mode & 0o777, r.node.t === 'd') & 0o7777);
+      }
+      return st;
+    }
+
+    // Tab completion: returns the new line, or a list of candidates when the line cannot be extended.
+    complete(line) {
+      const m = /(^|[\s|;&]+)([^\s|;&]*)$/.exec(line);
+      const word = m[2], before = line.slice(0, line.length - word.length);
+      const isCmd = /(^|[|;&])\s*$/.test(before);
+      let cands, slash = -1;
+      if (isCmd && !word.includes('/')) cands = COMMANDS.filter(n => n.startsWith(word)).map(n => ({ n, add: ' ', show: n }));
+      else {
+        slash = word.lastIndexOf('/');
+        const dpart = slash >= 0 ? word.slice(0, slash + 1) : '', base = word.slice(slash + 1);
+        const r = this.look(dpart.replace(/^~(?=\/|$)/, HOME) || '.');
+        if (r.err || r.node.t !== 'd') return { line, list: [] };
+        cands = Object.entries(r.node.kids)
+          .filter(([n, k]) => n.startsWith(base) && (base.startsWith('.') || !n.startsWith('.')) && (!isCmd || k.t === 'd' || k.mode & 0o100))
+          .map(([n, k]) => ({ n: dpart + n, add: k.t === 'd' ? '/' : ' ', show: n + (k.t === 'd' ? '/' : '') }));
+      }
+      cands.sort((a, b) => cmpName(a.n, b.n));
+      if (!cands.length) return { line, list: [] };
+      if (cands.length === 1) return { line: before + cands[0].n + cands[0].add, list: [] };
+      let pre = cands[0].n;
+      for (const cd of cands) while (!cd.n.startsWith(pre)) pre = pre.slice(0, -1);
+      if (pre.length > word.length) return { line: before + pre, list: [] };
+      return { line, list: cands.map(cd => cd.show) };
+    }
+  }
+/*ENGINE-END*/
+
+  // ---------- Page ----------
+  const $ = id => document.getElementById(id);
+  const KEY = 'terminalEscapeBest';
+  const N = LEVELS.length;
+  const term = $('term'), log = $('log'), input = $('cmd'), ov = $('ov');
+  const escHTML = s => s.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const CLS = { d: 'c-dir', x: 'c-exe', m: 'c-match', f: 'c-file', n: 'c-num', s: 'c-sep' };
+  const render = text => escHTML(text).replace(/\x01(.)([\s\S]*?)\x02/g, (_, k, s) => `<span class="${CLS[k]}">${s}</span>`);
+
+  let sh = null, lvl = 0, state = 'ready', hpos = 0, draft = '', lastTabList = '';
+  const hist = [];
+  let onGo = null, onAlt = null;
+
+  function promptHTML() { return `<span class="pu">player@escape</span>:<span class="pp">${escHTML(sh ? sh.promptPath() : '~')}</span>$ `; }
+  function updatePrompt() { $('prompt').innerHTML = promptHTML(); }
+  function print(html, cls = '') {
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.innerHTML = html;
+    log.append(d);
+    while (log.childElementCount > 600) log.firstElementChild.remove();
+    term.scrollTop = term.scrollHeight;
+  }
+  function measureCols() {
+    if (!sh) return;
+    const m = document.createElement('span');
+    m.className = 'measure'; m.textContent = 'M'.repeat(20);
+    term.append(m);
+    const cw = m.getBoundingClientRect().width / 20 || 8;
+    m.remove();
+    sh.cols = Math.max(20, Math.floor((term.clientWidth - 26) / cw));
+  }
+  function hud() {
+    $('hlevel').textContent = lvl + 1;
+    $('hbest').textContent = Arcade.best(KEY);
+    $('hhints').textContent = sh ? sh.hintsUsed : 0;
+  }
+  function brief(i, mission) {
+    const L = LEVELS[i];
+    $('ltag').textContent = `Level ${i + 1} of ${N}`;
+    $('ltitle').textContent = L.title;
+    $('lesson').innerHTML = L.lesson;
+    $('mission').innerHTML = mission || 'The mission appears here when the level starts.';
+  }
+
+  function startLevel(i) {
+    lvl = i;
+    sh = new Shell(i, (Math.random() * 2 ** 32) >>> 0, hist);
+    state = 'play';
+    ov.hidden = true;
+    brief(i, sh.level.mission);
+    log.replaceChildren();
+    measureCols();
+    print(escHTML(`Level ${i + 1}: ${sh.level.title}`), 'info');
+    print(escHTML(sh.level.mission.replace(/<[^>]+>/g, '')));
+    print(escHTML('Type help to see the available commands, or hint if you get stuck.'), 'info');
+    updatePrompt(); hud();
+    input.value = '';
+    input.focus();
+  }
+
+  function showOverlay(title, text, goLabel, go, altLabel, alt) {
+    $('ovt').textContent = title; $('ovp').textContent = text;
+    $('go').textContent = goLabel; onGo = go;
+    $('alt').hidden = !altLabel; if (altLabel) $('alt').textContent = altLabel; onAlt = alt;
+    ov.hidden = false;
+    $('go').focus();
+  }
+  function startScreen() {
+    state = 'ready';
+    const b = Arcade.best(KEY);
+    if (b > 0) {
+      const n = Math.min(b + 1, N);
+      const done = b >= N ? `You have completed all ${N} levels.` : `You have completed ${b} of ${N} levels.`;
+      brief(n - 1); lvl = n - 1; hud();
+      showOverlay('Ready to play?', `Welcome back! ${done} Press Enter to continue from level ${n}, or start over from level 1.`, `Continue from level ${n}`, () => startLevel(n - 1), 'Start from level 1', () => startLevel(0));
+    } else {
+      brief(0); hud();
+      showOverlay('Ready to play?', 'Type real Linux commands into the terminal to find the hidden code in each level. Every level teaches one new skill, and you can type hint whenever you get stuck.', 'Start game', () => startLevel(0));
+    }
+  }
+  function levelDone() {
+    state = 'over';
+    const prev = Arcade.best(KEY);
+    Arcade.record(KEY, lvl + 1);
+    hud();
+    const h = sh.hintsUsed;
+    const hints = h === 0 ? 'You solved it without any hints.' : `You used ${h} ${h === 1 ? 'hint' : 'hints'}.`;
+    if (lvl + 1 >= N) {
+      showOverlay('You escaped!', `You finished all ${N} levels. ${LEVELS[lvl].learned} ${hints} These are the same commands that people use every day on real Linux systems.`, 'Play again', () => startLevel(0));
+    } else {
+      const fresh = lvl + 1 > prev ? ' Your progress has been saved.' : '';
+      showOverlay(`Level ${lvl + 1} complete`, `${LEVELS[lvl].learned} ${hints}${fresh}`, 'Next level', () => startLevel(lvl + 1));
+    }
+  }
+
+  function runCommand() {
+    const line = input.value;
+    input.value = '';
+    lastTabList = '';
+    print(promptHTML() + escHTML(line));
+    if (line.trim()) hist.push(line);
+    hpos = hist.length; draft = '';
+    const res = sh.run(line);
+    if (res.clear) log.replaceChildren();
+    for (const ch of res.out) {
+      const t = ch.text.replace(/\n$/, '');
+      print(render(t), ch.err ? 'err' : '');
+    }
+    updatePrompt(); hud();
+    if (res.solved) { state = 'won'; setTimeout(levelDone, 500); }
+  }
+
+  input.addEventListener('keydown', e => {
+    if (state !== 'play') { if (e.key === 'Enter' || e.key === 'Tab') e.preventDefault(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat || input.value) runCommand(); return; }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (e.shiftKey || e.ctrlKey || e.altKey) return;
+      const r = sh.complete(input.value);
+      if (r.line !== input.value) { input.value = r.line; lastTabList = ''; return; }
+      if (r.list.length) {
+        const key = r.list.join(' ');
+        if (lastTabList === input.value + '|' + key) return;
+        lastTabList = input.value + '|' + key;
+        print(promptHTML() + escHTML(input.value));
+        print(escHTML(r.list.join('  ')));
+      }
+      return;
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!hist.length) return;
+      if (hpos === hist.length) draft = input.value;
+      hpos = Math.max(0, Math.min(hist.length, hpos + (e.key === 'ArrowUp' ? -1 : 1)));
+      input.value = hpos === hist.length ? draft : hist[hpos];
+      const end = input.value.length;
+      input.setSelectionRange(end, end);
+      return;
+    }
+    if (e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')) {
+      if (String(getSelection()).length && !(input.selectionStart !== input.selectionEnd)) return;
+      e.preventDefault();
+      print(promptHTML() + escHTML(input.value) + '^C');
+      input.value = ''; hpos = hist.length;
+      return;
+    }
+    if (e.ctrlKey && !e.altKey && (e.key === 'l' || e.key === 'L')) { e.preventDefault(); log.replaceChildren(); return; }
+  });
+
+  // Keep the command line focused while playing.
+  term.addEventListener('mouseup', () => { if (state === 'play' && !String(getSelection())) input.focus(); });
+  addEventListener('keydown', e => {
+    if (e.key === 'Escape') return;
+    if (!ov.hidden) {
+      // preventDefault stops the focused button's own synthetic click, so the action runs once.
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (e.repeat) return;
+        (document.activeElement === $('alt') ? $('alt') : $('go')).click();
+      }
+      return;
+    }
+    if (state === 'play' && document.activeElement !== input && !e.metaKey && !e.altKey && !(e.ctrlKey && e.key.toLowerCase() === 'c')) input.focus();
+  }, true);
+  $('go').addEventListener('click', () => { if (!ov.hidden && onGo) onGo(); });
+  $('alt').addEventListener('click', () => { if (!ov.hidden && onAlt) onAlt(); });
+  addEventListener('resize', measureCols);
+
+  updatePrompt();
+  startScreen();
+})();
+</script>

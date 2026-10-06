@@ -1,0 +1,359 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Switch Off</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: moves and par line, a 5x5 board of tiles, tool buttons, and a status line. */
+  :root { --accent: #ffe066; }
+  h1 { color: var(--accent); }
+  .meta {
+    display: flex; justify-content: space-between; margin-bottom: 14px;
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .meta b { color: var(--ink); font-size: 0.9rem; }
+  .meta b.under { color: var(--good); }
+  .meta b.over { color: var(--danger); }
+  .board {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+    width: 100%; max-width: 420px; margin: 0 auto; padding: 4px;
+  }
+  .tile {
+    position: relative; padding: 0; border-radius: 8px; aspect-ratio: 1; min-width: 0;
+    background: var(--ground); box-shadow: inset 0 0 0 1px var(--grid);
+    transition: background 140ms ease, box-shadow 140ms ease, transform 120ms ease;
+  }
+  .tile.on {
+    background: var(--accent);
+    box-shadow: 0 0 20px -2px color-mix(in srgb, var(--accent) 70%, transparent), inset 0 -4px 0 color-mix(in srgb, #000 18%, var(--accent));
+  }
+  .tile.cur { outline: 4px solid var(--accent); outline-offset: 3px; }
+  .tile.cur::after {
+    content: ""; position: absolute; inset: 0; border-radius: 8px;
+    box-shadow: inset 0 0 0 3px var(--ink);
+  }
+  .tile:focus-visible { outline: 4px solid var(--accent); outline-offset: 3px; }
+  .tile.hint::before {
+    content: ""; position: absolute; inset: 22%; border-radius: 50%;
+    border: 3px dashed var(--good); background: color-mix(in srgb, var(--good) 30%, transparent);
+  }
+  .tile.flip { transform: scale(0.92); }
+  .tools { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+  .tools button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .status { margin: 14px 0 0; min-height: 3em; text-align: center; color: var(--muted); font-size: 0.88rem; line-height: 1.5; }
+  .status.good { color: var(--good); }
+  @media (prefers-reduced-motion: reduce) {
+    .tile { transition: none; }
+    .tile.flip { transform: none; }
+    .tile.on { box-shadow: inset 0 -4px 0 color-mix(in srgb, #000 18%, var(--accent)); }
+  }
+</style>
+
+<div class="cab">
+  <h1>Switch Off</h1>
+  <p class="rule">Pressing a tile flips it and its four neighbors. Turn off every light to clear the level, and finish at or under par for bonus points.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Level</span><span class="v" id="level">1</span></div>
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span>Moves <b id="moves">0</b></span><span>Par <b id="par">0</b></span></div>
+    <div class="board" id="board" role="group" aria-label="Switch Off board, 5 rows by 5 columns"></div>
+    <div class="tools">
+      <button id="hint" type="button" class="ghost">Hint</button>
+      <button id="restart" type="button" class="ghost">Restart puzzle</button>
+      <button id="fresh" type="button" class="ghost">New puzzle</button>
+    </div>
+    <p class="status" id="status" aria-live="polite"></p>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Move around the board with the arrow keys and press Space to flip a tile and its neighbors. Clear the board in as few moves as you can.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Use the arrow keys to move, and press <kbd>Space</kbd> or <kbd>Enter</kbd> to press a tile. Press <kbd>R</kbd> to restart the puzzle, <kbd>H</kbd> for a hint, and <kbd>N</kbd> for a new puzzle at the same level. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+// GEN-START
+// Board model and solver. A board is a 25-bit integer: bit (row * 5 + col) is set when that light is on.
+const N = 5, CELLS = N * N;
+const MASKS = Array.from({ length: CELLS }, (_, i) => {
+  const r = Math.floor(i / N), c = i % N;
+  let m = 1 << i;
+  if (r > 0) m |= 1 << (i - N);
+  if (r < N - 1) m |= 1 << (i + N);
+  if (c > 0) m |= 1 << (i - 1);
+  if (c < N - 1) m |= 1 << (i + 1);
+  return m;
+});
+const popcount = x => { let n = 0; while (x) { x &= x - 1; n++; } return n; };
+const applyPresses = (board, presses) => { for (let i = 0; i < CELLS; i++) if (presses >> i & 1) board ^= MASKS[i]; return board; };
+
+// Solves A x = b over GF(2), where row i of A is the set of presses that flip light i.
+// Returns every solution (4 for the 5x5 board, whose null space is 2-dimensional), or [] if unsolvable.
+function solveAll(board) {
+  const AUG = 1 << CELLS;
+  const rows = MASKS.map((m, i) => m | ((board >> i & 1) ? AUG : 0));
+  const pivots = [];
+  let r = 0;
+  for (let c = 0; c < CELLS && r < CELLS; c++) {
+    let p = r;
+    while (p < CELLS && !(rows[p] >> c & 1)) p++;
+    if (p === CELLS) continue;
+    [rows[r], rows[p]] = [rows[p], rows[r]];
+    for (let k = 0; k < CELLS; k++) if (k !== r && (rows[k] >> c & 1)) rows[k] ^= rows[r];
+    pivots.push(c);
+    r++;
+  }
+  for (let k = r; k < CELLS; k++) if (rows[k] & AUG) return [];
+  const isPivot = new Set(pivots);
+  const free = [];
+  for (let c = 0; c < CELLS; c++) if (!isPivot.has(c)) free.push(c);
+  let particular = 0;
+  pivots.forEach((c, k) => { if (rows[k] & AUG) particular |= 1 << c; });
+  const basis = free.map(f => {
+    let v = 1 << f;
+    pivots.forEach((c, k) => { if (rows[k] >> f & 1) v |= 1 << c; });
+    return v;
+  });
+  const out = [];
+  for (let s = 0; s < 1 << basis.length; s++) {
+    let x = particular;
+    basis.forEach((b, j) => { if (s >> j & 1) x ^= b; });
+    out.push(x);
+  }
+  return out;
+}
+
+// The solution with the fewest presses, as a 25-bit set of tiles to press (or null if unsolvable).
+function bestSolution(board) {
+  const all = solveAll(board);
+  if (!all.length) return null;
+  return all.reduce((a, b) => (popcount(b) < popcount(a) ? b : a));
+}
+
+const pressesFor = level => Math.min(3 + Math.floor((level - 1) * 0.75), 15);
+
+// A puzzle is made by pressing k distinct random tiles on a dark board, so it is always solvable.
+function makePuzzle(level, rand) {
+  const k = pressesFor(level);
+  for (;;) {
+    const order = Array.from({ length: CELLS }, (_, i) => i);
+    for (let i = CELLS - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+    let presses = 0;
+    for (const i of order.slice(0, k)) presses |= 1 << i;
+    const board = applyPresses(0, presses);
+    if (!board) continue;
+    const par = popcount(bestSolution(board));
+    if (par < 2) continue;
+    return { board, k, par, presses };
+  }
+}
+// GEN-END
+
+  const BEST_KEY = 'switchOffBest', HINT_COST = 20;
+  const $ = id => document.getElementById(id);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+  const s = { state: 'ready', level: 1, score: 0, puzzle: null, board: 0, moves: 0, hints: 0, hintTile: -1, cur: 12, tiles: [], timer: 0, prevBest: 0 };
+
+  function build() {
+    const board = $('board');
+    for (let i = 0; i < CELLS; i++) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tile';
+      b.tabIndex = -1;
+      b.addEventListener('click', () => { setCursor(i); press(i); });
+      board.append(b);
+      s.tiles.push(b);
+    }
+  }
+
+  function render() {
+    s.tiles.forEach((t, i) => {
+      const on = !!(s.board >> i & 1);
+      t.classList.toggle('on', on);
+      t.classList.toggle('hint', i === s.hintTile);
+      t.setAttribute('aria-label', `Row ${Math.floor(i / N) + 1}, column ${i % N + 1}, light ${on ? 'on' : 'off'}${i === s.hintTile ? ', suggested by the hint' : ''}`);
+    });
+    $('moves').textContent = s.moves;
+    $('par').textContent = s.puzzle ? s.puzzle.par : 0;
+    $('moves').className = !s.puzzle || s.moves === 0 ? '' : s.moves <= s.puzzle.par ? 'under' : 'over';
+    $('level').textContent = s.level;
+    $('score').textContent = s.score.toLocaleString('en-US');
+    $('best').textContent = Arcade.best(BEST_KEY);
+  }
+
+  function setCursor(i, focus = true) {
+    s.tiles[s.cur].classList.remove('cur');
+    s.tiles[s.cur].tabIndex = -1;
+    s.cur = i;
+    s.tiles[i].classList.add('cur');
+    s.tiles[i].tabIndex = 0;
+    if (focus) s.tiles[i].focus();
+  }
+
+  function say(text, good) {
+    const el = $('status');
+    el.className = 'status' + (good ? ' good' : '');
+    el.textContent = text;
+  }
+
+  function lightsLeft() { return popcount(s.board); }
+
+  function newPuzzle(message) {
+    clearTimeout(s.timer);
+    s.puzzle = makePuzzle(s.level, Math.random);
+    s.board = s.puzzle.board;
+    s.moves = 0; s.hints = 0; s.hintTile = -1;
+    s.state = 'play';
+    Arcade.record(BEST_KEY, s.level);
+    render();
+    setCursor(12);
+    say(message || `Level ${s.level} has ${plural(lightsLeft(), 'light', 'lights')} on. Par is ${plural(s.puzzle.par, 'move', 'moves')}.`);
+  }
+
+  function restart() {
+    if (s.state !== 'play') return;
+    s.board = s.puzzle.board;
+    s.moves = 0; s.hintTile = -1;
+    render();
+    say('The puzzle is back to its starting layout, and your move count is reset.');
+  }
+
+  function hint() {
+    if (s.state !== 'play') return;
+    const sol = bestSolution(s.board);
+    // Suggest the solution tile closest to the cursor, so the hint is easy to reach with the arrow keys.
+    let pick = -1, dist = Infinity;
+    for (let i = 0; i < CELLS; i++) {
+      if (!(sol >> i & 1)) continue;
+      const d = Math.abs(Math.floor(i / N) - Math.floor(s.cur / N)) + Math.abs(i % N - s.cur % N);
+      if (d < dist) { dist = d; pick = i; }
+    }
+    if (s.hintTile !== pick) s.hints++;
+    s.hintTile = pick;
+    render();
+    const left = popcount(sol);
+    say(`Try pressing the tile in row ${Math.floor(pick / N) + 1}, column ${pick % N + 1}. From here, the board can be cleared in ${plural(left, 'more press', 'more presses')}. Each hint takes ${HINT_COST} points off this puzzle’s reward.`);
+  }
+
+  function press(i) {
+    if (s.state !== 'play') return;
+    s.board ^= MASKS[i];
+    s.moves++;
+    s.hintTile = -1;
+    if (!reduced) {
+      const hit = s.tiles.filter((_, j) => MASKS[i] >> j & 1);
+      hit.forEach(t => t.classList.add('flip'));
+      setTimeout(() => hit.forEach(t => t.classList.remove('flip')), 120);
+    }
+    render();
+    if (s.board === 0) return solved();
+    say(`${plural(lightsLeft(), 'light is', 'lights are')} still on after ${plural(s.moves, 'move', 'moves')}.`);
+  }
+
+  function reward() {
+    const { par } = s.puzzle;
+    let pts = 50 + 10 * s.level;
+    if (s.moves <= par) pts += 50;
+    else pts = Math.max(10, pts - 5 * (s.moves - par));
+    return Math.max(0, pts - HINT_COST * s.hints);
+  }
+
+  function solved() {
+    s.state = 'solved';
+    const { par } = s.puzzle, pts = reward();
+    s.score += pts;
+    render();
+    const how = s.moves < par ? 'That’s under par!' : s.moves === par ? 'That’s right at par!' : `That’s ${plural(s.moves - par, 'move', 'moves')} over par.`;
+    const hintNote = s.hints ? ` You used ${plural(s.hints, 'hint', 'hints')}.` : '';
+    const msg = `You turned off every light in ${plural(s.moves, 'move', 'moves')}, and par was ${par}. ${how}${hintNote} You earned ${plural(pts, 'point', 'points')}.`;
+    say(`All switched off! ${msg}`, true);
+    s.level++;
+    const isNew = s.level > s.prevBest;
+    Arcade.record(BEST_KEY, s.level);
+    const next = isNew ? ` Level ${s.level} is the highest level you have reached so far.` : '';
+    s.timer = setTimeout(() => showOverlay('All switched off!', msg + next, 'Next puzzle'), reduced ? 300 : 700);
+  }
+
+  function showOverlay(t, p, b) {
+    $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b;
+    $('ov').hidden = false;
+    $('go').focus();
+  }
+
+  function go() {
+    if (s.state === 'ready') {
+      s.prevBest = Arcade.best(BEST_KEY);
+      s.level = 1; s.score = 0;
+    } else if (s.state !== 'solved') return;
+    $('ov').hidden = true;
+    newPuzzle();
+  }
+
+  const MOVES = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (!$('ov').hidden) {
+      // preventDefault stops the focused button's synthetic click, so go() runs once.
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!e.repeat) go(); }
+      return;
+    }
+    if (MOVES[e.key]) {
+      e.preventDefault();
+      if (s.state !== 'play') return;
+      const [dx, dy] = MOVES[e.key];
+      const x = Math.min(N - 1, Math.max(0, s.cur % N + dx));
+      const y = Math.min(N - 1, Math.max(0, Math.floor(s.cur / N) + dy));
+      setCursor(y * N + x);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      // A focused tool button keeps its normal behavior; anywhere else the key presses the cursor tile.
+      // Handled here (with preventDefault) so each action runs exactly once.
+      const el = e.target.closest && e.target.closest('button, a');
+      if (el && el.tagName === 'A') return;
+      e.preventDefault();
+      if (e.repeat) return;
+      if (el && TOOLS[el.id]) TOOLS[el.id]();
+      else press(s.cur);
+    } else if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault(); restart();
+    } else if (e.key === 'h' || e.key === 'H') {
+      e.preventDefault(); hint();
+    } else if (e.key === 'n' || e.key === 'N') {
+      e.preventDefault();
+      if (s.state === 'play') freshPuzzle();
+    }
+  });
+  $('go').addEventListener('click', go);
+  // Tool buttons act and then hand focus back to the board.
+  const TOOLS = {
+    restart: () => { restart(); s.tiles[s.cur].focus(); },
+    hint: () => { hint(); s.tiles[s.cur].focus(); },
+    fresh: () => { if (s.state === 'play') freshPuzzle(); s.tiles[s.cur].focus(); },
+  };
+  for (const id in TOOLS) $(id).addEventListener('click', TOOLS[id]);
+
+  function freshPuzzle() {
+    newPuzzle();
+    say(`Here is a new puzzle for level ${s.level}. It has ${plural(lightsLeft(), 'light', 'lights')} on, and par is ${plural(s.puzzle.par, 'move', 'moves')}.`);
+  }
+
+  build();
+  s.board = 0b0010001110001000000000000 >>> 0;
+  render();
+  $('go').focus();
+})();
+</script>

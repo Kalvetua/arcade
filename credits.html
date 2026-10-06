@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Credits</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: a single readable column of credits and notices. */
+  .cab { max-width: 680px; gap: 18px; }
+  h2 { font-family: var(--display); font-weight: 400; font-size: 1.2rem; margin: 0 0 6px; color: var(--ghost); }
+  section p, section li { color: var(--ink); line-height: 1.6; font-size: 0.9rem; margin: 0 0 8px; }
+  section ul { margin: 0; padding-left: 20px; }
+  pre {
+    white-space: pre-wrap; font: 0.75rem/1.5 var(--mono); color: var(--muted);
+    background: var(--board); border-radius: 4px; padding: 12px; margin: 8px 0 0;
+    box-shadow: inset 0 0 0 1px var(--grid);
+  }
+  a { color: var(--ink); }
+</style>
+
+<div class="cab">
+  <h1>Credits</h1>
+  <p class="rule">The Arcade is built from scratch. These are the outside materials it uses, and the notices that come with them.</p>
+
+  <section>
+    <h2>Fonts</h2>
+    <p>The arcade uses <strong>Bungee</strong> by David Jonathan Ross and <strong>IBM Plex Mono</strong> by IBM. Both are licensed under the SIL Open Font License 1.1 and are bundled with the site, together with their license texts: <a href="fonts/OFL-Bungee.txt">Bungee license</a> and <a href="fonts/OFL-IBM-Plex-Mono.txt">IBM Plex Mono license</a>.</p>
+  </section>
+
+  <section>
+    <h2>Map data</h2>
+    <p>The country outlines in Map From Memory are simplified from <strong>Natural Earth</strong> data, which is in the public domain. The data was obtained through the <strong>world-atlas</strong> package, which comes with this notice:</p>
+    <pre>Copyright 2013-2019 Michael Bostock
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.</pre>
+  </section>
+
+  <section>
+    <h2>Trademarks and names</h2>
+    <ul>
+      <li>Git is a trademark of Software Freedom Conservancy. Commit Rescue, Command Recall and the other IT games are not affiliated with the Git project.</li>
+      <li>Linux is a registered trademark of Linus Torvalds. PowerShell and Windows are trademarks of Microsoft.</li>
+      <li>Films, companies, products and other names that appear in questions and facts are mentioned only as facts, and belong to their respective owners. None of them sponsor or endorse this site.</li>
+      <li>All companies, people, email addresses and web addresses in Phish or Legit are invented for training. They use reserved example domains that can’t belong to anyone.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Privacy</h2>
+    <p>The arcade doesn’t collect anything and makes no requests to other websites. Your best scores, daily results and streak are stored only in your own browser.</p>
+  </section>
+
+  <p class="keys">Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+<script src="arcade.js"></script>

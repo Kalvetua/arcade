@@ -1,0 +1,324 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Two Truths and a Lie</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: HUD, then a panel with topic row, timer bar, three stacked statements, feedback, and a Next button. */
+  :root { --accent: #ff7a90; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 420px; }
+  .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #streak { color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--ground); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  .bar i.low { background: var(--danger); }
+  #topic { margin: 0; font-family: var(--display); font-weight: 400; font-size: 1.35rem; line-height: 1.2; outline: none; }
+  .ask { margin: 0; color: var(--muted); font-size: 0.85rem; }
+  #choices { grid-template-columns: 1fr; }
+  .choice { padding: 12px 14px; align-items: flex-start; }
+  .choice kbd { margin-top: 1px; }
+  .choice .txt { flex: 1; }
+  .choice .tag { flex: none; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; padding: 2px 6px; border-radius: 3px; margin-top: 1px; }
+  .choice.right .tag { color: var(--ground); background: var(--good); }
+  .choice.lie .tag { color: var(--ground); background: var(--danger); }
+  .choice.lie { background: color-mix(in srgb, var(--danger) 22%, var(--ground)); box-shadow: inset 0 0 0 2px var(--danger); }
+  .choice.picked { outline: 3px dashed var(--ink); outline-offset: 2px; }
+  .choice:focus-visible, .choice:focus { outline: 4px solid var(--accent); outline-offset: 2px; }
+  .choice:disabled { cursor: default; color: var(--ink); }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.9rem; line-height: 1.5; color: var(--muted); }
+  #fb b { display: block; font-weight: 600; }
+  #fb.right b { color: var(--good); }
+  #fb.wrong b { color: var(--danger); }
+  #next { align-self: flex-start; }
+  #next:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; }
+  #go:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+  @media (prefers-reduced-motion: no-preference) {
+    .choice.right, .choice.lie { transition: background 0.2s, box-shadow 0.2s; }
+  }
+</style>
+
+<div class="cab">
+  <h1>Two Truths and a Lie</h1>
+  <p class="rule">Each round gives you three statements about a topic, and exactly one of them is false. Spot the lie to earn 100 points plus a bonus for every correct answer in a row, but three misses end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Round 1</span><span id="streak"></span></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <h2 id="topic" tabindex="-1">Your first topic will appear here.</h2>
+    <p class="ask" id="ask">Which of these statements is the lie?</p>
+    <div class="choices" id="choices"></div>
+    <p id="fb" aria-live="polite"></p>
+    <button id="next" type="button" hidden>Next round</button>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">You have 20 seconds per round to find the false statement. Press 1, 2, or 3, or click a statement, to pick the lie.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Press <kbd>1</kbd>, <kbd>2</kbd>, or <kbd>3</kbd> to pick the lie, or move between statements with the arrow keys and press <kbd>Enter</kbd>. Press <kbd>Enter</kbd> to start a game or go on to the next round. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const KEY = 'twoTruthsBest', TIME = 20000, LIVES = 3;
+
+  // [topic, truth, truth, lie, correction of the lie]
+  const ROUNDS = [
+    ['Octopuses', 'Octopus blood is blue because it carries oxygen with a copper-based protein called hemocyanin.', 'Most of an octopus’s neurons are located in its arms rather than in its central brain.', 'An octopus has two hearts.', 'Actually, octopuses have three hearts: two pump blood through the gills, and one pumps it to the rest of the body.'],
+    ['Honey and bees', 'Pots of honey found in ancient Egyptian tombs were still edible thousands of years later.', 'Bees make honey from flower nectar, evaporating much of its water by fanning it with their wings.', 'A single worker honeybee makes about a full teaspoon of honey in her lifetime.', 'Actually, a worker honeybee makes only about one-twelfth of a teaspoon of honey in her lifetime.'],
+    ['The Moon', 'The Moon always shows roughly the same face to Earth because it is tidally locked.', 'The Moon is slowly drifting away from Earth, by about 3.8 centimeters per year.', 'Eight astronauts walked on the Moon during the Apollo program.', 'Actually, twelve astronauts walked on the Moon, on six Apollo missions between 1969 and 1972.'],
+    ['Ancient Rome', 'Roman concrete was made with volcanic ash, and some Roman harbor structures built with it still stand today.', 'Julius Caesar was assassinated on the Ides of March in 44 BC.', 'The Colosseum in Rome was completed in 180 AD under Emperor Marcus Aurelius.', 'Actually, the Colosseum was completed in 80 AD under Emperor Titus.'],
+    ['Coffee', 'Coffee beans are the seeds of a fruit that is often called a coffee cherry.', 'Arabica and robusta are the two species behind nearly all of the coffee grown in the world.', 'The coffee plant is native to South America.', 'Actually, coffee plants are native to Africa, and arabica coffee comes originally from the highlands of Ethiopia.'],
+    ['The human body', 'The femur, or thighbone, is the longest bone in the human body.', 'The smallest bone in the human body is the stapes, which sits in the middle ear.', 'Most adults have 14 pairs of ribs.', 'Actually, most adults have 12 pairs of ribs.'],
+    ['Sweden', 'Sweden switched from driving on the left to driving on the right in 1967.', 'Sweden’s national day, June 6, has been an official public holiday only since 2005.', 'Sweden adopted the euro as its currency in 2002.', 'Actually, Sweden still uses the Swedish krona, and its voters rejected the euro in a 2003 referendum.'],
+    ['Chess', 'A pawn that reaches the far side of the board can be promoted to a queen, rook, bishop, or knight.', 'The en passant rule lets a pawn capture an enemy pawn that has just moved two squares to land beside it.', 'Each player starts a game of chess with ten pawns.', 'Actually, each player starts with eight pawns, which fill the second rank.'],
+    ['Bananas', 'Banana plants are not trees but giant herbs, because their stems are not woody.', 'Bananas are very slightly radioactive because they contain potassium, including the isotope potassium-40.', 'Most bananas sold in stores around the world today are of the Gros Michel variety.', 'Actually, most exported bananas are Cavendish bananas; the Gros Michel was largely replaced in the mid-1900s after Panama disease devastated it.'],
+    ['Sharks', 'Sharks have existed for longer than trees have.', 'A shark’s skeleton is made of cartilage rather than bone.', 'The whale shark, the largest fish in the world, mainly hunts seals.', 'Actually, whale sharks are filter feeders that eat mostly plankton and small fish.'],
+    ['Mars', 'Olympus Mons on Mars is about two and a half times as tall as Mount Everest.', 'Mars has two small moons, named Phobos and Deimos.', 'A day on Mars lasts about 30 hours.', 'Actually, a day on Mars is only slightly longer than a day on Earth, at roughly 24 hours and 40 minutes.'],
+    ['Venus', 'A day on Venus, one full spin on its axis, is longer than its year.', 'Venus spins in the opposite direction from most planets, so the Sun rises in the west there.', 'Venus is the planet closest to the Sun.', 'Actually, Mercury is the planet closest to the Sun, although Venus is hotter because of its thick atmosphere.'],
+    ['Saturn', 'Saturn’s average density is lower than that of water.', 'Saturn’s rings are made mostly of chunks of water ice.', 'Saturn is the largest planet in the Solar System.', 'Actually, Jupiter is the largest planet, and Saturn is the second largest.'],
+    ['The Sun', 'Sunlight takes about eight minutes to reach Earth.', 'The Sun holds about 99.8 percent of all the mass in the Solar System.', 'The Sun is made mostly of helium.', 'Actually, the Sun is made mostly of hydrogen, which accounts for about three-quarters of its mass.'],
+    ['Ancient Egypt', 'Cleopatra lived closer in time to the first Moon landing than to the building of the Great Pyramid of Giza.', 'The Rosetta Stone carries the same decree in Egyptian hieroglyphs, Demotic script, and ancient Greek.', 'The Great Pyramid of Giza was built for the pharaoh Ramesses II.', 'Actually, the Great Pyramid was built for the pharaoh Khufu, more than a thousand years before Ramesses II was born.'],
+    ['The Vikings', 'The Norse explorer Leif Erikson reached North America around the year 1000, nearly five centuries before Columbus.', 'There is no evidence that Viking warriors wore horned helmets in battle.', 'The best-known Norse site in North America, L’Anse aux Meadows, is in Maine.', 'Actually, L’Anse aux Meadows is on the island of Newfoundland, in Canada.'],
+    ['Japan', 'Japan is made up of thousands of islands, but most of its people live on the four largest.', 'Mount Fuji last erupted in 1707.', 'Tokyo has been the capital of Japan since the year 794.', 'Actually, Kyoto became the capital in 794, and the emperor moved to Tokyo, then called Edo, in 1868.'],
+    ['Australia', 'Australia is wider from east to west than the Moon’s diameter.', 'The Great Barrier Reef, off the coast of Queensland, is the largest coral reef system in the world.', 'Sydney is the capital of Australia.', 'Actually, the capital is Canberra, a city built as a compromise between rivals Sydney and Melbourne.'],
+    ['Canada', 'Canada has the longest coastline of any country in the world.', 'Canada’s red maple leaf flag was adopted in 1965.', 'Canada’s capital, Ottawa, is in the province of Quebec.', 'Actually, Ottawa is in Ontario, just across the Ottawa River from Gatineau, Quebec.'],
+    ['The English alphabet', 'The word “alphabet” comes from alpha and beta, the first two letters of the Greek alphabet.', 'The sentence “The quick brown fox jumps over the lazy dog” uses every letter of the English alphabet.', 'The most common letter in written English is A.', 'Actually, the most common letter in written English is E.'],
+    ['Elephants', 'Elephants are pregnant for about 22 months, longer than any other land mammal.', 'An elephant’s trunk is a fusion of its nose and upper lip.', 'African elephants have smaller ears than Asian elephants.', 'Actually, African elephants have much larger ears, which help them shed heat.'],
+    ['Penguins', 'Emperor penguin fathers keep the egg warm on their feet through the Antarctic winter.', 'Almost all penguin species live in the Southern Hemisphere.', 'The emperor penguin is the smallest penguin species.', 'Actually, the emperor penguin is the largest species, and the little penguin of Australia and New Zealand is the smallest.'],
+    ['Cats', 'Cats cannot taste sweetness.', 'Cats commonly sleep for 12 to 16 hours a day.', 'Cats have the same number of toes on their front and back paws.', 'Actually, most cats have five toes on each front paw but only four on each back paw.'],
+    ['Dogs', 'A dog’s sense of smell is thousands of times more sensitive than a human’s.', 'Dogs sweat mainly through their paw pads and cool off mostly by panting.', 'Dogs were domesticated from the red fox.', 'Actually, dogs descend from an ancient population of wolves.'],
+    ['Chocolate', 'The Aztecs used cacao beans as a form of money.', 'White chocolate contains cocoa butter but no cocoa solids.', 'Chocolate comes from the seeds of a tree native to West Africa.', 'Actually, the cacao tree is native to the tropical Americas, although West Africa now grows most of the world’s cacao.'],
+    ['Tomatoes', 'Botanically, a tomato is a fruit, and more specifically a berry.', 'Tomatoes were domesticated in the Americas and reached Europe in the 1500s.', 'Tomatoes belong to the same plant family as cabbage and broccoli.', 'Actually, tomatoes belong to the nightshade family, along with potatoes, eggplants, and peppers.'],
+    ['The Olympics', 'The first modern Olympic Games were held in Athens in 1896.', 'The five interlocking Olympic rings were designed by Pierre de Coubertin.', 'The first Winter Olympics were held in London in 1948.', 'Actually, the first Winter Olympics were held in 1924 in Chamonix, France.'],
+    ['Soccer', 'The first FIFA World Cup was held in Uruguay in 1930, and the host nation won it.', 'A standard soccer match lasts 90 minutes, split into two halves of 45 minutes.', 'A regulation soccer goal is 10 feet high, the same height as a basketball hoop.', 'Actually, a regulation soccer goal is 8 feet (2.44 meters) high and 24 feet wide.'],
+    ['Basketball', 'Basketball was invented in 1891 by James Naismith, who used peach baskets as the goals.', 'A regulation basketball hoop is 10 feet above the floor.', 'An NBA game is made up of four quarters of 15 minutes each.', 'Actually, NBA quarters are 12 minutes long, for a 48-minute game.'],
+    ['Tennis', 'Wimbledon, first held in 1877, is the oldest tennis tournament in the world.', 'In tennis scoring, a score of zero is called “love.”', 'The French Open is played on grass courts.', 'Actually, the French Open is played on red clay, and Wimbledon is the Grand Slam played on grass.'],
+    ['Mount Everest', 'Mount Everest sits on the border between Nepal and China.', 'Everest is named after George Everest, a British surveyor who worked in India.', 'Edmund Hillary and Tenzing Norgay first reached the summit of Everest in 1963.', 'Actually, Hillary and Tenzing reached the summit on May 29, 1953.'],
+    ['The Amazon', 'The Amazon River carries more water than any other river in the world.', 'Most of the Amazon rainforest lies in Brazil.', 'The Amazon River empties into the Pacific Ocean.', 'Actually, the Amazon flows east across South America and empties into the Atlantic Ocean.'],
+    ['The Sahara', 'The Sahara is the largest hot desert in the world.', 'Thousands of years ago, much of the Sahara was green, with lakes and grasslands.', 'Most of the Sahara is covered by sand dunes.', 'Actually, sand dunes cover only about a quarter of the Sahara, and most of it is rocky plateaus and gravel plains.'],
+    ['Iceland', 'Iceland’s parliament, the Althing, was founded in 930 and is one of the oldest parliaments in the world.', 'Iceland sits on the Mid-Atlantic Ridge, where the North American and Eurasian plates are pulling apart.', 'Iceland is a member of the European Union.', 'Actually, Iceland is not in the European Union, although it belongs to the European Economic Area and the Schengen Area.'],
+    ['Russia', 'Russia spans eleven time zones.', 'At the Bering Strait, Russia and the United States are less than 4 kilometers apart, between the two Diomede Islands.', 'The Trans-Siberian Railway runs from Moscow to Murmansk.', 'Actually, the Trans-Siberian Railway runs from Moscow to Vladivostok, on the Pacific coast.'],
+    ['Volcanoes', 'Measured from its base on the ocean floor, Mauna Kea in Hawaii is taller than Mount Everest.', 'The eruption of Mount Vesuvius in 79 AD buried the Roman towns of Pompeii and Herculaneum.', 'The famous 1883 eruption of Krakatoa took place in the Philippines.', 'Actually, Krakatoa is in Indonesia, between the islands of Java and Sumatra.'],
+    ['Lightning', 'A lightning bolt can heat the air around it to about five times the temperature of the Sun’s surface.', 'Lightning often strikes the same place more than once, and tall buildings are hit many times a year.', 'Light travels only about ten times faster than sound, which is why thunder arrives a little after the flash.', 'Actually, light travels nearly a million times faster than sound in air.'],
+    ['Water', 'Water is densest at about 4 °C, which is why lakes freeze from the top down.', 'About 97 percent of the water on Earth is salt water.', 'Pure water is an excellent conductor of electricity.', 'Actually, pure water conducts electricity poorly, and it is the dissolved salts and minerals in ordinary water that let it carry a current.'],
+    ['Diamonds', 'Diamond and graphite, the “lead” in pencils, are both made of pure carbon.', 'A diamond will burn if it is heated enough in the presence of oxygen.', 'Most natural diamonds formed near Earth’s surface within the last few thousand years.', 'Actually, most natural diamonds formed deep in Earth’s mantle, typically more than a billion years ago.'],
+    ['Blood', 'Mature human red blood cells have no nucleus.', 'Blood gets its red color from hemoglobin, an iron-containing protein.', 'The blood in your veins is blue until it is exposed to oxygen.', 'Actually, human blood is always red; it is darker when low in oxygen, and veins only look blue through the skin.'],
+    ['The brain', 'The human brain makes up about 2 percent of body weight but uses about 20 percent of the body’s energy.', 'The brain itself has no pain receptors, so some brain surgery can be done while the patient is awake.', 'Most people use only about 10 percent of their brains.', 'Actually, brain scans show that people use virtually all of their brain, just not every part at the same moment.'],
+    ['Bones and teeth', 'Babies are born with more bones than adults have, because many of them fuse together during growth.', 'Tooth enamel is the hardest substance in the human body.', 'A typical adult human skeleton has 306 bones.', 'Actually, a typical adult skeleton has 206 bones.'],
+    ['Ancient Greece', 'The first recorded ancient Olympic Games were held at Olympia in 776 BC.', 'Socrates left no writings of his own, and we know his ideas mostly through his student Plato.', 'Alexander the Great was tutored by Socrates.', 'Actually, Alexander was tutored by Aristotle, who had been a student of Plato.'],
+    ['The Black Death', 'The Black Death killed an estimated third or more of Europe’s population.', 'The plague is caused by the bacterium Yersinia pestis.', 'The Black Death swept through Europe in the 1600s.', 'Actually, the Black Death struck Europe mainly between 1347 and 1351.'],
+    ['The printing press', 'Johannes Gutenberg introduced movable-type printing to Europe in the mid-1400s.', 'Movable type was used in China and Korea centuries before Gutenberg.', 'Gutenberg built his famous printing press in Venice.', 'Actually, Gutenberg did his famous printing in Mainz, Germany.'],
+    ['The Titanic', 'The Titanic sank on its maiden voyage in April 1912.', 'The wreck of the Titanic was found in 1985.', 'The Titanic was sailing from New York to Southampton when it sank.', 'Actually, the Titanic was sailing from Southampton toward New York.'],
+    ['The American Revolution', 'The Declaration of Independence was adopted on July 4, 1776.', 'John Adams and Thomas Jefferson both died on July 4, 1826, exactly 50 years after the Declaration was adopted.', 'George Washington was the third president of the United States.', 'Actually, Washington was the first president, and Thomas Jefferson was the third.'],
+    ['Space exploration', 'Yuri Gagarin became the first human in space in April 1961.', 'Sputnik 1, launched by the Soviet Union in 1957, was the first artificial satellite.', 'The Voyager 1 space probe was launched in 1997.', 'Actually, Voyager 1 was launched in 1977, and it has since left the Sun’s heliosphere for interstellar space.'],
+    ['Stars', 'A teaspoon of neutron star material would weigh billions of tons on Earth.', 'Proxima Centauri is the closest known star to the Sun.', 'Light from the nearest star beyond the Sun takes about four minutes to reach us.', 'Actually, light from Proxima Centauri takes about 4.2 years to reach us.'],
+    ['Jupiter', 'Jupiter’s Great Red Spot is a storm larger than Earth.', 'Jupiter has the shortest day of any planet, at just under 10 hours.', 'Jupiter is a rocky planet with a solid surface like Earth’s.', 'Actually, Jupiter is a gas giant made mostly of hydrogen and helium, with no solid surface to stand on.'],
+    ['Pluto', 'Pluto was reclassified as a dwarf planet in 2006.', 'NASA’s New Horizons spacecraft flew past Pluto in 2015.', 'Pluto was discovered in 1830.', 'Actually, Pluto was discovered in 1930 by Clyde Tombaugh.'],
+    ['Trees', 'Coast redwoods are the tallest trees in the world, and some are over 110 meters tall.', 'You can estimate the age of many trees by counting their yearly growth rings.', 'Most of a tree’s mass comes from minerals it absorbs from the soil.', 'Actually, most of a tree’s mass comes from carbon dioxide taken from the air during photosynthesis.'],
+    ['Spiders', 'Spiders are arachnids, not insects, and they have eight legs.', 'Weight for weight, some spider silk is stronger than steel.', 'All spiders spin webs to catch their prey.', 'Actually, many spiders, such as wolf spiders and jumping spiders, hunt without building webs.'],
+    ['Birds', 'The ostrich lays the largest egg of any living bird.', 'Birds are living dinosaurs, descended from a group called theropods.', 'The kiwi, a flightless bird, is native to Australia.', 'Actually, kiwis are found only in New Zealand.'],
+    ['Whales', 'The blue whale is the largest animal known to have ever lived.', 'Whales evolved from mammals that lived on land.', 'A blue whale’s heart is about the size of a tennis ball.', 'Actually, a blue whale’s heart weighs roughly 180 kilograms (about 400 pounds).'],
+    ['Snakes', 'Snakes smell with their tongues, flicking scent particles to an organ in the roof of the mouth.', 'Ireland has no native snakes.', 'Pythons kill their prey with venom.', 'Actually, pythons are not venomous, and they kill their prey by constriction.'],
+    ['Australian animals', 'The platypus is a mammal that lays eggs.', 'Wombats produce cube-shaped droppings.', 'Koalas are a type of bear.', 'Actually, koalas are marsupials, not bears, and they carry their young in a pouch.'],
+    ['France', 'Counting its overseas territories, France has more time zones than any other country.', 'The Eiffel Tower was built for the 1889 World’s Fair in Paris.', 'The Statue of Liberty was a gift to the United States from Spain.', 'Actually, the Statue of Liberty was a gift from the people of France, dedicated in 1886.'],
+    ['Italy', 'Two independent countries, San Marino and Vatican City, lie entirely within Italy.', 'The Leaning Tower of Pisa began to lean in the 1100s, while it was still being built.', 'Venice is built on islands in the Tyrrhenian Sea.', 'Actually, Venice lies in a lagoon of the Adriatic Sea, on Italy’s northeast coast.'],
+    ['The United Kingdom', 'The United Kingdom is made up of England, Scotland, Wales, and Northern Ireland.', 'Strictly speaking, “Big Ben” is the name of the great bell, not of the clock tower.', 'The Channel Tunnel connects England with Belgium.', 'Actually, the Channel Tunnel links Folkestone in England with Coquelles, near Calais, in France.'],
+    ['China', 'The invention of paper is traditionally credited to Cai Lun, a Chinese court official, around 105 AD.', 'China uses a single official time zone, even though the country spans about five geographic ones.', 'The Great Wall of China was built entirely during a single dynasty.', 'Actually, walls were built and rebuilt over many dynasties, and much of what stands today dates from the Ming dynasty.'],
+    ['The Nile', 'The Nile flows north and empties into the Mediterranean Sea.', 'The White Nile and the Blue Nile join at Khartoum, in Sudan.', 'The Aswan High Dam on the Nile was completed in 1870.', 'Actually, the Aswan High Dam was completed in 1970.'],
+    ['Mexico', 'Mexico City was built on the site of Tenochtitlan, the Aztec capital.', 'Besides Spanish, Mexico legally recognizes dozens of Indigenous languages.', 'Mexico’s Day of the Dead is celebrated in mid-July.', 'Actually, the Day of the Dead is celebrated mainly on November 1 and 2.'],
+    ['India', 'The Taj Mahal was built by the Mughal emperor Shah Jahan as a tomb for his wife Mumtaz Mahal.', 'India’s constitution lists more than 20 officially recognized languages.', 'The capital of India is Mumbai.', 'Actually, India’s capital is New Delhi, and Mumbai is its largest financial center.'],
+    ['Antarctica', 'Antarctica is the coldest, windiest, and driest continent.', 'Antarctica has no permanent residents, only researchers and support staff who live there temporarily.', 'The South Pole sits on floating sea ice.', 'Actually, the South Pole sits on an ice sheet about 2,700 meters thick that rests on land.'],
+    ['Oceans', 'The Mariana Trench in the Pacific is the deepest known part of the ocean, nearly 11 kilometers down.', 'The longest mountain range on Earth is a chain of mid-ocean ridges that lies mostly underwater.', 'The Arctic Ocean is the largest of the world’s five oceans.', 'Actually, the Arctic is the smallest and shallowest of the five oceans, and the Pacific is the largest.'],
+    ['Planet Earth', 'Earth is not a perfect sphere; it bulges slightly at the equator.', 'Earth’s inner core is solid metal, while its outer core is liquid.', 'Earth is closest to the Sun in July.', 'Actually, Earth is closest to the Sun in early January; the seasons come from the tilt of Earth’s axis, not from its distance to the Sun.'],
+    ['Computing history', 'A 1947 logbook entry for a Harvard computer records a real moth found stuck in a relay, taped in as the first actual case of a “bug” being found.', 'Alan Turing helped break German codes at Bletchley Park during World War II.', 'The first email between computers on a network was sent in 1991.', 'Actually, Ray Tomlinson sent the first network email between computers on ARPANET in 1971.'],
+    ['The World Wide Web', 'Tim Berners-Lee invented the World Wide Web while working at CERN.', 'The first web browser was itself named WorldWideWeb.', 'The internet and the World Wide Web were both invented in 1989.', 'Actually, the internet grew out of ARPANET, which began in 1969, two decades before the web was proposed in 1989.'],
+    ['Programming languages', 'The Python programming language is named after the British comedy group Monty Python.', 'The first version of JavaScript was written in about ten days in 1995.', 'Java and JavaScript were designed by the same person.', 'Actually, Java was created by James Gosling at Sun Microsystems, and JavaScript by Brendan Eich at Netscape.'],
+    ['Video games', 'Tetris was created in the Soviet Union by Alexey Pajitnov in 1984.', 'Mario first appeared in the 1981 arcade game Donkey Kong, where he was called Jumpman.', 'Pac-Man was created in the United States by Atari.', 'Actually, Pac-Man was created in Japan by Namco, designed by Toru Iwatani, and released in 1980.'],
+    ['Painting', 'The Mona Lisa hangs in the Louvre in Paris.', 'Vincent van Gogh painted The Starry Night while staying at an asylum in Saint-Rémy-de-Provence.', 'Michelangelo painted the Sistine Chapel ceiling in about three months.', 'Actually, Michelangelo worked on the Sistine Chapel ceiling for about four years, from 1508 to 1512.'],
+    ['Classical music', 'A standard modern piano has 88 keys.', 'Beethoven kept composing after he had become almost completely deaf.', 'Wolfgang Amadeus Mozart was born in Vienna.', 'Actually, Mozart was born in Salzburg in 1756, although he later lived and worked in Vienna.'],
+    ['Novels', 'Mary Shelley was 20 years old when Frankenstein was published.', 'Don Quixote, by Miguel de Cervantes, is often called the first modern novel.', 'Charles Dickens wrote Pride and Prejudice.', 'Actually, Pride and Prejudice was written by Jane Austen and published in 1813.'],
+    ['Shakespeare', 'The original Globe Theatre burned down in 1613 after a cannon fired during a play set its thatched roof on fire.', 'Shakespeare was born and buried in Stratford-upon-Avon.', 'Shakespeare lived and wrote during the reign of Queen Victoria.', 'Actually, Shakespeare lived from 1564 to 1616, during the reigns of Elizabeth I and James I.'],
+    ['The marathon', 'The modern marathon distance is 42.195 kilometers, or about 26.2 miles.', 'The marathon is inspired by the legend of a Greek messenger who ran from Marathon to Athens.', 'The marathon has been exactly 42.195 kilometers long at every Olympics since 1896.', 'Actually, early Olympic marathons varied in length; the 42.195-kilometer distance comes from the 1908 London Games and became the standard in 1921.'],
+    ['Word origins', 'The word “robot” comes from R.U.R., a play by the Czech writer Karel Čapek.', 'The word “quarantine” comes from the Italian for “forty days.”', 'The word “kindergarten” comes from French.', 'Actually, “kindergarten” is German for “children’s garden,” a term coined by Friedrich Fröbel.'],
+    ['Languages of the world', 'The Hawaiian alphabet has only 13 letters.', 'Esperanto is a constructed language created in the 1880s by L. L. Zamenhof.', 'The official language of Brazil is Spanish.', 'Actually, Brazil’s official language is Portuguese, a legacy of Portuguese colonization.'],
+    ['Physics', 'Isaac Newton published his laws of motion in 1687, in a book known as the Principia.', 'In a vacuum, a feather and a hammer fall at the same rate.', 'Sound travels faster in air than in water.', 'Actually, sound travels about four times faster in water than in air.'],
+    ['Chemistry', 'Helium was detected in the Sun’s light before it was found on Earth.', 'The chemical symbol for gold, Au, comes from the Latin word aurum.', 'Oxygen is the most abundant gas in Earth’s atmosphere.', 'Actually, nitrogen makes up about 78 percent of the air, while oxygen makes up about 21 percent.'],
+    ['Inventions', 'The Wright brothers’ first successful powered flight, in 1903, lasted about 12 seconds.', 'Alexander Graham Bell received a patent for the telephone in 1876.', 'The Wright brothers made their first powered flight near Kitty Hawk, Ohio.', 'Actually, the first flight took place near Kitty Hawk, North Carolina, while Ohio was the brothers’ home state.'],
+    ['Medicine', 'Alexander Fleming discovered penicillin in 1928.', 'Edward Jenner developed the first smallpox vaccine using material from cowpox.', 'Smallpox is still a common disease in many countries today.', 'Actually, smallpox was declared eradicated worldwide in 1980.'],
+    ['Cheese', 'Blue cheeses such as Roquefort are ripened with a mold from the Penicillium genus.', 'The holes in Swiss cheese are formed by carbon dioxide gas released by bacteria.', 'Parmesan cheese originally comes from Switzerland.', 'Actually, Parmigiano-Reggiano comes from northern Italy, around Parma and Reggio Emilia.'],
+    ['Spices', 'Saffron comes from the stigmas of a crocus flower.', 'Vanilla comes from the seed pods of an orchid.', 'Cinnamon comes from the roots of a tree.', 'Actually, cinnamon comes from the inner bark of trees in the Cinnamomum genus.'],
+    ['Potatoes', 'Potatoes were first domesticated in the Andes of South America.', 'The Great Famine in Ireland in the 1840s was caused by a potato blight.', 'Sweet potatoes and ordinary potatoes are close relatives in the same plant family.', 'Actually, potatoes are nightshades, while sweet potatoes belong to the morning glory family.'],
+    ['Tea', 'After water, tea is the most widely consumed drink in the world.', 'Green tea and black tea come from the same plant, Camellia sinensis.', 'Tea drinking began in India and was later introduced to China.', 'Actually, tea drinking began in China, and large-scale tea growing in India started much later, under British rule in the 1800s.'],
+    ['Capital cities', 'La Paz, Bolivia’s seat of government, is one of the highest capital cities in the world.', 'The capital of Turkey is Ankara, not Istanbul.', 'The capital of Switzerland is Zurich.', 'Actually, Switzerland’s federal city is Bern, although Zurich is its largest city.'],
+    ['Lakes', 'Lake Baikal in Siberia is the deepest lake in the world.', 'By area, the Caspian Sea is the largest lake on Earth.', 'Lake Superior lies entirely within Canada.', 'Actually, Lake Superior is shared by Canada and the United States.'],
+    ['Dinosaurs', 'Tyrannosaurus rex lived closer in time to humans than to Stegosaurus.', 'The word “dinosaur” means “terrible lizard.”', 'The asteroid impact linked to the extinction of the dinosaurs struck near Australia.', 'Actually, the impact crater linked to the extinction, Chicxulub, lies beneath Mexico’s Yucatán Peninsula.'],
+    ['Butterflies', 'Monarch butterflies migrate thousands of kilometers between Canada, the United States, and Mexico.', 'Butterflies taste with sensors on their feet.', 'A caterpillar turns into a butterfly inside a cocoon spun from silk.', 'Actually, butterflies form a hard-shelled chrysalis, and silk cocoons are made by many moths.'],
+    ['Money', 'The US one-dollar bill shows a portrait of George Washington.', 'Euro coins and banknotes went into circulation in 2002.', 'The United Kingdom replaced the pound sterling with the euro in 2002.', 'Actually, the United Kingdom never adopted the euro and still uses the pound sterling.'],
+    ['Mathematics', 'Indian mathematicians, such as Brahmagupta in the 600s, were the first to set out rules for calculating with zero as a number.', 'Pi is an irrational number, so its decimal digits never end and never settle into a repeating pattern.', 'A prime number has exactly three divisors.', 'Actually, a prime number has exactly two divisors: 1 and itself.'],
+    ['Calendars', 'The year 2000 was a leap year, even though most century years are not.', 'In a leap year, February has 29 days.', 'The Gregorian calendar was introduced by Julius Caesar.', 'Actually, the Gregorian calendar was introduced in 1582 by Pope Gregory XIII, while Julius Caesar introduced the earlier Julian calendar.'],
+    ['Flags', 'Nepal’s flag is the only national flag that is not a rectangle.', 'Denmark’s flag is often cited as the oldest national flag still in continuous use.', 'Japan’s flag shows a red circle on a blue background.', 'Actually, Japan’s flag shows a red circle on a white background.'],
+  ].map(([topic, t1, t2, lie, fix]) => ({ topic, truths: [t1, t2], lie, fix }));
+
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, streak: 0, n: 0, right: 0, queue: [], cur: null, items: [], t0: 0, timer: 0 };
+  $('best').textContent = best.toLocaleString('en-US');
+
+  const plural = (n, one, many) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+  const bonus = () => 20 * Math.min(Math.max(s.streak - 1, 0), 10);
+
+  function showOverlay(t, p, b) {
+    $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b;
+    $('ov').hidden = false; $('go').focus();
+  }
+
+  function hud() {
+    $('score').textContent = s.score.toLocaleString('en-US');
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', plural(s.lives, 'life', 'lives'));
+    $('streak').textContent = s.streak > 1 ? `${s.streak} in a row` : '';
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, streak: 0, n: 0, right: 0, queue: Arcade.shuffle(ROUNDS) });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function next() {
+    if (!s.queue.length) return end(true);
+    s.cur = s.queue.pop();
+    s.n++;
+    // Shuffle the statements so the lie lands in a random position each time.
+    s.items = Arcade.shuffle([
+      { text: s.cur.truths[0], lie: false },
+      { text: s.cur.truths[1], lie: false },
+      { text: s.cur.lie, lie: true },
+    ]);
+    $('num').textContent = `Round ${s.n} of ${ROUNDS.length}`;
+    $('topic').textContent = s.cur.topic;
+    $('fb').innerHTML = ''; $('fb').className = '';
+    $('next').hidden = true;
+    const box = $('choices');
+    box.innerHTML = '';
+    s.items.forEach((it, i) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'choice';
+      b.innerHTML = '<kbd></kbd><span class="txt"></span><span class="tag" hidden></span>';
+      b.querySelector('kbd').textContent = i + 1;
+      b.querySelector('.txt').textContent = it.text;
+      b.setAttribute('aria-label', `Statement ${i + 1}: ${it.text}`);
+      b.addEventListener('click', () => answer(i));
+      box.append(b);
+    });
+    s.state = 'ask';
+    s.t0 = performance.now();
+    box.firstChild.focus();
+    tick();
+  }
+
+  function tick() {
+    cancelAnimationFrame(s.timer);
+    if (s.state !== 'ask') return;
+    const left = Math.max(0, TIME - (performance.now() - s.t0));
+    const bar = $('bar');
+    bar.style.transform = `scaleX(${left / TIME})`;
+    bar.classList.toggle('low', left < 5000);
+    if (left <= 0) return answer(-1);
+    s.timer = requestAnimationFrame(tick);
+  }
+
+  function answer(i) {
+    if (s.state !== 'ask') return;
+    cancelAnimationFrame(s.timer);
+    s.state = 'reveal';
+    const btns = [...$('choices').children];
+    const lieAt = s.items.findIndex(it => it.lie);
+    const right = i === lieAt;
+    btns.forEach((b, j) => {
+      const tag = b.querySelector('.tag');
+      tag.hidden = false;
+      tag.textContent = s.items[j].lie ? 'False' : 'True';
+      b.classList.add(s.items[j].lie ? 'lie' : 'right');
+      if (j === i) b.classList.add('picked');
+      b.setAttribute('aria-label', `Statement ${j + 1}, ${s.items[j].lie ? 'false' : 'true'}: ${s.items[j].text}`);
+    });
+    let head;
+    if (right) {
+      s.streak++; s.right++;
+      const extra = bonus(), pts = 100 + extra;
+      s.score += pts;
+      head = extra ? `Correct! +${pts} points, including a ${extra}-point streak bonus.` : `Correct! +${pts} points.`;
+    } else {
+      s.streak = 0; s.lives--;
+      head = i < 0 ? `Time’s up. The lie was statement ${lieAt + 1}.` : `Not quite. The lie was statement ${lieAt + 1}.`;
+    }
+    const fb = $('fb');
+    fb.className = right ? 'right' : 'wrong';
+    fb.innerHTML = '<b></b><span></span>';
+    fb.querySelector('b').textContent = head;
+    fb.querySelector('span').textContent = s.cur.fix;
+    hud();
+    const nx = $('next');
+    nx.textContent = s.lives > 0 ? (s.queue.length ? 'Next round' : 'See results') : 'See results';
+    nx.hidden = false;
+    nx.focus();
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives > 0) return next();
+    end(false);
+  }
+
+  function end(cleared) {
+    s.state = 'over';
+    $('next').hidden = true;
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = best.toLocaleString('en-US');
+    const tail = s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${plural(best, 'point', 'points')}.` : '');
+    const spotted = `You spotted ${plural(s.right, 'lie', 'lies')} in ${plural(s.n, 'round', 'rounds')}`;
+    showOverlay(cleared ? 'You finished every round!' : 'Game over',
+      `${spotted} and scored ${plural(s.score, 'point', 'points')}. ${tail}`, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (s.state === 'ask') {
+      const i = '123'.indexOf(e.key);
+      if (i >= 0 && e.key.length === 1) { e.preventDefault(); answer(i); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const btns = [...$('choices').children];
+        const at = btns.indexOf(document.activeElement);
+        const to = at < 0 ? 0 : (at + (e.key === 'ArrowDown' ? 1 : btns.length - 1)) % btns.length;
+        btns[to].focus();
+      }
+      // Enter or Space on a focused statement activates it as a normal button click.
+    } else if (s.state === 'reveal' && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault(); advance();
+    } else if ((s.state === 'ready' || s.state === 'over') && e.key === 'Enter') {
+      e.preventDefault(); start();
+    }
+  });
+  $('go').addEventListener('click', start);
+  $('next').addEventListener('click', advance);
+  $('go').focus();
+})();
+</script>

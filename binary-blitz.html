@@ -1,0 +1,340 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Binary Blitz</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: HUD, then a panel with a meta row, timer bar, the number or operation, the question, an answer box and the worked explanation. */
+  :root { --accent: #c3e88d; }
+  h1 { color: var(--accent); }
+  .cab { max-width: 620px; }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 420px; }
+  .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #lvl { color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--ground); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  .bar i.low { background: var(--danger); }
+  #show { margin: 0; font: 600 clamp(1.2rem, 5.5vw, 1.8rem) / 1.35 var(--mono); white-space: pre; overflow-x: auto; color: var(--ink); }
+  #show .op { color: var(--accent); }
+  #q { margin: 0; font-size: 1.02rem; line-height: 1.45; }
+  #hint { margin: -6px 0 0; font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
+  .row { display: flex; gap: 8px; }
+  #ans {
+    flex: 1; min-width: 0; font: 600 1.1rem var(--mono); color: var(--ink); background: var(--ground);
+    border: 0; border-radius: 4px; padding: 10px 12px; box-shadow: inset 0 0 0 1px var(--grid);
+  }
+  #ans:focus, #ans:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #ans[readonly] { color: var(--muted); }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.9rem; color: var(--muted); line-height: 1.5; }
+  #fb.right { color: var(--good); }
+  #fb.wrong { color: var(--danger); }
+  #work { margin: 0; padding: 12px 14px; background: var(--ground); border-radius: 4px; font-size: 0.82rem; line-height: 1.65; overflow-x: auto; }
+  #work p { margin: 0; }
+  #work p + p, #work pre + p, #work p + pre, #work table + p { margin-top: 6px; }
+  #work b { color: var(--accent); font-weight: 600; }
+  #work pre { margin: 0; font: 600 0.95rem / 1.5 var(--mono); }
+  #work table { border-collapse: collapse; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  #work td { padding: 1px 5px; text-align: center; font-size: 0.78rem; }
+  #work tr:first-child td { color: var(--muted); }
+  #work td.on { color: var(--accent); font-weight: 600; }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="cab">
+  <h1>Binary Blitz</h1>
+  <p class="rule">Convert numbers between binary, decimal and hexadecimal, then work out bitwise operations. Faster answers earn more points, and three wrong answers end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Question 1</span><span id="lvl">Level 1</span></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <p id="show">1011 0110</p>
+    <p id="q">Your first question will appear here.</p>
+    <p id="hint"></p>
+    <div class="row">
+      <input id="ans" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Your answer" placeholder="Type your answer">
+      <button id="sub" type="button">Submit</button>
+    </div>
+    <p id="fb" aria-live="polite"></p>
+    <div id="work" hidden></div>
+    <button id="next" type="button" hidden>Next question</button>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Each question tells you which base to answer in. Type your answer and press Enter before the timer runs out.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Type your answer and press <kbd>Enter</kbd> to submit it, then press <kbd>Enter</kbd> again to move on to the next question. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  /* CORE START: pure logic, no DOM. The node harness extracts and tests this block. */
+  const NAME = { bin: 'binary', dec: 'decimal', hex: 'hexadecimal' };
+  const HINT = {
+    bin: 'Answer in binary, for example 1010 0001 or 0b10100001.',
+    dec: 'Answer in decimal, for example 173.',
+    hex: 'Answer in hexadecimal, for example 3F or 0x3F.',
+  };
+  const fmt = n => n.toLocaleString('en-US');
+  const group = str => str.replace(/\B(?=(?:[01]{4})+$)/g, ' ');
+  function show(v, base, bits) {
+    if (base === 'bin') return group(v.toString(2).padStart(bits, '0'));
+    if (base === 'hex') return '0x' + v.toString(16).toUpperCase().padStart(Math.ceil(bits / 4), '0');
+    return fmt(v);
+  }
+
+  // Parses typed input in the expected base. Returns a number, or null if the input is not in that base.
+  function parseAns(input, base) {
+    let s = String(input).trim();
+    if (base === 'bin') {
+      s = s.replace(/[\s_]/g, '').replace(/^0b/i, '');
+      return /^[01]{1,32}$/.test(s) ? parseInt(s, 2) : null;
+    }
+    if (base === 'hex') {
+      s = s.replace(/[\s_]/g, '').replace(/^0x/i, '');
+      return /^[0-9a-f]{1,8}$/i.test(s) ? parseInt(s, 16) : null;
+    }
+    s = s.replace(/[\s,_]/g, '');
+    return /^\d{1,10}$/.test(s) ? parseInt(s, 10) : null;
+  }
+
+  const OPS = ['AND', 'OR', 'XOR', 'NOT', '<<', '>>'];
+  function compute(op, a, b) {
+    switch (op) {
+      case 'AND': return a & b;
+      case 'OR': return a | b;
+      case 'XOR': return a ^ b;
+      case 'NOT': return ~a & 255;
+      case '<<': return (a << b) & 255;
+      case '>>': return a >>> b;
+    }
+  }
+
+  function makeQuestion(level, rand = Math.random) {
+    const r = n => Math.floor(rand() * n);
+    const conv = bits => {
+      const pairs = [['bin', 'dec'], ['dec', 'bin'], ['hex', 'dec'], ['dec', 'hex'], ['bin', 'hex'], ['hex', 'bin']];
+      const [from, to] = pairs[r(pairs.length)];
+      const lo = bits === 8 ? 1 : 2 ** (bits - 4);
+      const value = lo + r(2 ** bits - lo);
+      return { kind: 'conv', from, to, bits, value, answer: value, time: bits === 8 ? 20000 : 30000 };
+    };
+    if (level === 1) return conv(8);
+    if (level === 2) return conv(rand() < 0.5 ? 12 : 16);
+    if (rand() < 0.4) return conv(16);
+    const op = OPS[r(OPS.length)];
+    const a = 1 + r(255);
+    const b = op === '<<' || op === '>>' ? 1 + r(3) : op === 'NOT' ? null : 1 + r(255);
+    return { kind: 'op', op, a, b, bits: 8, to: 'bin', answer: compute(op, a, b), time: 20000 };
+  }
+
+  function display(q) {
+    if (q.kind === 'conv') return show(q.value, q.from, q.bits);
+    const A = show(q.a, 'bin', 8);
+    if (q.op === 'NOT') return `NOT ${A}`;
+    if (q.op === '<<' || q.op === '>>') return `${A} ${q.op} ${q.b}`;
+    return `    ${A}\n${q.op.padEnd(3)} ${show(q.b, 'bin', 8)}`;
+  }
+
+  function prompt(q) {
+    if (q.kind === 'conv') return `Convert this ${q.bits}-bit ${NAME[q.from]} number to ${NAME[q.to]}.`;
+    if (q.op === 'NOT') return 'Apply NOT to this 8-bit number. What is the result in binary?';
+    if (q.op === '<<') return `Shift this 8-bit number left by ${q.b} ${q.b === 1 ? 'bit' : 'bits'} and keep only 8 bits. What is the result in binary?`;
+    if (q.op === '>>') return `Shift this 8-bit number right by ${q.b} ${q.b === 1 ? 'bit' : 'bits'}, filling with zeros. What is the result in binary?`;
+    return `What is the result of ${q.op} on these two 8-bit numbers, in binary?`;
+  }
+
+  // Returns { ok: false, msg } for input that is not in the expected base, otherwise { ok: true, right }.
+  function check(q, input) {
+    const v = parseAns(input, q.to);
+    if (v === null) {
+      const msg = { bin: 'Please type a binary number using only the digits 0 and 1.', dec: 'Please type a decimal number using only the digits 0 to 9.', hex: 'Please type a hexadecimal number using the digits 0 to 9 and the letters A to F.' };
+      return { ok: false, msg: msg[q.to] };
+    }
+    return { ok: true, right: v === q.answer };
+  }
+
+  const answerText = q => show(q.answer, q.to, q.bits);
+  const places = (v, radix) => { const out = []; let p = 1; while (p <= v) { out.unshift(p); p *= radix; } return out.length ? out : [1]; };
+  const list = a => (a.length < 2 ? a.join('') : a.length === 2 ? `${a[0]} and ${a[1]}` : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`);
+
+  function binTable(v, bits) {
+    if (bits !== 8) return '';
+    const cols = [128, 64, 32, 16, 8, 4, 2, 1];
+    return `<table aria-hidden="true"><tr>${cols.map(c => `<td>${c}</td>`).join('')}</tr><tr>${cols.map(c => `<td class="${v & c ? 'on' : ''}">${v & c ? 1 : 0}</td>`).join('')}</tr></table>`;
+  }
+
+  // The worked explanation, as HTML built only from numbers and fixed text.
+  function explain(q) {
+    const out = [];
+    if (q.kind === 'op') {
+      const A = show(q.a, 'bin', 8), R = show(q.answer, 'bin', 8);
+      let pre;
+      if (q.op === 'NOT') pre = `NOT ${A}\n  = ${R}`;
+      else if (q.op === '<<' || q.op === '>>') pre = `    ${A} ${q.op} ${q.b}\n  = ${R}`;
+      else pre = `    ${A}\n${q.op.padEnd(3)} ${show(q.b, 'bin', 8)}\n  = ${R}`;
+      out.push(`<pre>${pre}</pre>`);
+      const n = q.b, bitsW = `${n} ${n === 1 ? 'place' : 'places'}`;
+      const rule = {
+        AND: 'AND gives a 1 only in the columns where both bits are 1.',
+        OR: 'OR gives a 1 in every column where at least one of the bits is 1.',
+        XOR: 'XOR gives a 1 in the columns where the two bits are different.',
+        NOT: 'NOT flips every bit, so each 0 becomes 1 and each 1 becomes 0.',
+        '<<': `A left shift moves every bit ${bitsW} to the left. Bits that fall off the left end are dropped, and zeros fill in from the right.`,
+        '>>': `A logical right shift moves every bit ${bitsW} to the right. Bits that fall off the right end are dropped, and zeros fill in from the left.`,
+      }[q.op];
+      out.push(`<p>${rule} The result is <b>${R}</b>, which is ${fmt(q.answer)} in decimal.</p>`);
+      return out;
+    }
+    const v = q.value, B = show(v, 'bin', q.bits), H = show(v, 'hex', q.bits), D = fmt(v);
+    const pair = [q.from, q.to].sort().join('-');
+    if (pair === 'bin-dec') {
+      const set = places(v, 2).filter(p => v & p).map(fmt);
+      const sum = set.length > 1 ? `${set.join(' + ')} = ${D}` : `${D}`;
+      if (q.from === 'dec') out.push(`<p>Break ${D} into powers of two: ${sum}. Put a 1 in each of those columns and a 0 everywhere else, which gives <b>${B}</b>.</p>`);
+      else out.push(`<p>${B} has a 1 in the ${list(set)} ${set.length === 1 ? 'column' : 'columns'}. Adding those column values gives ${sum}, so the answer is <b>${D}</b>.</p>`);
+      if (q.bits === 8) out.push(binTable(v, 8));
+      else out.push('<p>Each binary column is worth twice the column to its right, starting from 1 on the far right.</p>');
+    } else if (pair === 'bin-hex') {
+      const digits = v.toString(16).toUpperCase().padStart(q.bits / 4, '0').split('');
+      const parts = digits.map(d => `${d} = ${parseInt(d, 16).toString(2).padStart(4, '0')}`);
+      out.push(`<p>Each hex digit stands for exactly four bits: ${list(parts)}.</p>`);
+      out.push(`<p>So ${q.from === 'hex' ? H : B} is <b>${q.from === 'hex' ? B : H}</b>.</p>`);
+    } else {
+      const digits = v.toString(16).toUpperCase().padStart(q.bits / 4, '0').split('');
+      const pl = digits.map((_, i) => 16 ** (digits.length - 1 - i));
+      const terms = digits.map((d, i) => `${parseInt(d, 16)} × ${fmt(pl[i])}`).join(' + ');
+      const letters = [...new Set(digits.filter(d => /[A-F]/.test(d)))].sort().map(d => `${d} is ${parseInt(d, 16)}`);
+      out.push(`<p>The hex columns are worth ${list(pl.map(fmt))}${letters.length ? `, and ${list(letters)}` : ''}.</p>`);
+      if (q.from === 'hex') out.push(`<p>${H} = ${terms} = <b>${D}</b>.</p>`);
+      else out.push(`<p>${D} = ${terms}, so the hex digits are ${list(digits)}, which gives <b>${H}</b>.</p>`);
+    }
+    return out;
+  }
+  /* CORE END */
+
+  const $ = id => document.getElementById(id);
+  const KEY = 'binaryBlitzBest', LIVES = 3;
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, n: 0, cur: null, t0: 0, timer: 0 };
+  $('best').textContent = fmt(best);
+  const levelOf = n => (n <= 6 ? 1 : n <= 12 ? 2 : 3);
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function hud() {
+    $('score').textContent = fmt(s.score);
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', `${s.lives} ${s.lives === 1 ? 'life' : 'lives'}`);
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, n: 0 });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function next() {
+    s.n++;
+    const level = levelOf(s.n);
+    s.cur = makeQuestion(level);
+    $('num').textContent = `Question ${s.n}`;
+    $('lvl').textContent = `Level ${level}`;
+    $('show').textContent = display(s.cur);
+    $('q').textContent = prompt(s.cur);
+    $('hint').textContent = HINT[s.cur.to];
+    $('fb').textContent = ''; $('fb').className = '';
+    $('work').hidden = true; $('next').hidden = true;
+    const a = $('ans');
+    a.readOnly = false; a.value = '';
+    a.placeholder = `Type a ${NAME[s.cur.to]} number`;
+    $('sub').hidden = false;
+    s.state = 'ask';
+    s.t0 = performance.now();
+    a.focus();
+    tick();
+  }
+
+  function tick() {
+    cancelAnimationFrame(s.timer);
+    if (s.state !== 'ask') return;
+    const T = s.cur.time, left = Math.max(0, T - (performance.now() - s.t0));
+    $('bar').style.transform = `scaleX(${left / T})`;
+    $('bar').classList.toggle('low', left < 5000);
+    if (left <= 0) return finish(false, true);
+    s.timer = requestAnimationFrame(tick);
+  }
+
+  function submit() {
+    if (s.state !== 'ask') return;
+    const v = $('ans').value;
+    if (!v.trim()) return;
+    const r = check(s.cur, v);
+    if (!r.ok) { $('fb').textContent = r.msg; $('fb').className = ''; $('ans').select(); return; }
+    finish(r.right, false);
+  }
+
+  function finish(right, timeout) {
+    if (s.state !== 'ask') return;
+    cancelAnimationFrame(s.timer);
+    s.state = 'reveal';
+    const fb = $('fb');
+    if (right) {
+      const T = s.cur.time, left = Math.max(0, T - (performance.now() - s.t0));
+      const pts = Math.round(50 + 150 * left / T) + 25 * (levelOf(s.n) - 1);
+      s.score += pts;
+      fb.textContent = `Correct! +${fmt(pts)} points.`; fb.className = 'right';
+    } else {
+      s.lives--;
+      fb.textContent = `${timeout ? 'Time’s up' : 'Not quite'}. The answer was ${answerText(s.cur)}.`; fb.className = 'wrong';
+    }
+    hud();
+    $('work').innerHTML = explain(s.cur).join('');
+    $('work').hidden = false;
+    $('ans').readOnly = true;
+    $('sub').hidden = true;
+    const nb = $('next');
+    nb.textContent = s.lives > 0 ? 'Next question' : 'See your result';
+    nb.hidden = false;
+    nb.focus();
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives > 0) return next();
+    s.state = 'over';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = fmt(best);
+    const qs = `${s.n} ${s.n === 1 ? 'question' : 'questions'}`;
+    showOverlay('Game over', `You scored ${fmt(s.score)} ${s.score === 1 ? 'point' : 'points'} in ${qs}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${fmt(best)}.` : '')}`, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.key !== 'Enter') return;
+    e.preventDefault();
+    if (e.repeat) return;
+    if (s.state === 'ask') submit();
+    else if (s.state === 'reveal') advance();
+    else start();
+  });
+  $('go').addEventListener('click', start);
+  $('sub').addEventListener('click', submit);
+  $('next').addEventListener('click', advance);
+  $('go').focus();
+})();
+</script>

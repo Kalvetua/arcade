@@ -1,0 +1,201 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Memory Grid</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: square board of tiles inside the panel, status line under it. */
+  :root { --accent: #ff9bd2; }
+  h1 { color: var(--accent); }
+  .board {
+    display: grid; grid-template-columns: repeat(var(--n, 3), 1fr); gap: 8px;
+    aspect-ratio: 1; width: 100%;
+  }
+  .board:focus { outline: none; }
+  .tile {
+    padding: 0; border-radius: 6px; aspect-ratio: 1; min-width: 0;
+    background: var(--ground); box-shadow: inset 0 0 0 1px var(--grid);
+    transition: background 150ms ease, box-shadow 150ms ease;
+  }
+  .tile.lit { background: var(--accent); box-shadow: 0 0 18px -2px var(--accent); }
+  .tile.hit { background: var(--good); }
+  .tile.miss { background: var(--danger); }
+  .tile.answer { background: color-mix(in srgb, var(--accent) 45%, var(--ground)); box-shadow: inset 0 0 0 2px var(--accent); }
+  .tile.cur { outline: 4px solid var(--accent); outline-offset: 2px; }
+  .tile:focus-visible { outline: 4px solid var(--accent); outline-offset: 2px; }
+  .status { margin: 14px 0 0; min-height: 1.5em; text-align: center; color: var(--muted); font-size: 0.9rem; }
+  @media (prefers-reduced-motion: reduce) { .tile { transition: none; } .tile.lit { box-shadow: none; } }
+</style>
+
+<div class="cab">
+  <h1>Memory Grid</h1>
+  <p class="rule">A few tiles light up for a moment. Memorize them, then find them all again once they go dark.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Level</span><span class="v" id="level">1</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives">3</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="board" id="board" role="group" aria-label="Memory grid board" tabindex="-1"></div>
+    <p class="status" id="status" aria-live="polite"></p>
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Watch closely as some tiles light up. When they go dark, pick every tile that was lit. Each wrong pick costs you a life.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Use the arrow keys to move around the board, and press <kbd>Space</kbd> or <kbd>Enter</kbd> to pick a tile. You can also press <kbd>Enter</kbd> to start a game. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const BEST_KEY = 'memoryGridBest';
+  const board = $('board');
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const s = { state: 'ready', level: 1, lives: 3, n: 3, lit: new Set(), found: new Set(), cur: 0, tiles: [], timer: 0 };
+  $('best').textContent = Arcade.best(BEST_KEY);
+
+  // Level 1: 3x3 with 3 lit. Grid grows every two levels up to 7x7; one more lit tile per level.
+  const sizeFor = lv => Math.min(7, 3 + Math.floor((lv - 1) / 2));
+  const countFor = (lv, n) => Math.min(lv + 2, Math.floor(n * n * 0.5));
+
+  function hud() {
+    $('level').textContent = s.level;
+    $('lives').textContent = s.lives;
+  }
+  function say(t) { $('status').textContent = t; }
+
+  function build() {
+    s.n = sizeFor(s.level);
+    board.style.setProperty('--n', s.n);
+    board.replaceChildren();
+    s.tiles = [];
+    for (let i = 0; i < s.n * s.n; i++) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'tile';
+      b.tabIndex = -1;
+      b.setAttribute('aria-label', `Tile in row ${Math.floor(i / s.n) + 1}, column ${i % s.n + 1}`);
+      b.addEventListener('click', () => { setCursor(i); pick(i); });
+      board.append(b);
+      s.tiles.push(b);
+    }
+  }
+
+  function setCursor(i, focus = true) {
+    s.tiles[s.cur]?.classList.remove('cur');
+    s.tiles.forEach(t => t.tabIndex = -1);
+    s.cur = i;
+    const t = s.tiles[i];
+    t.classList.add('cur');
+    t.tabIndex = 0;
+    if (focus) t.focus();
+  }
+
+  function round() {
+    clearTimeout(s.timer);
+    build();
+    hud();
+    const count = countFor(s.level, s.n);
+    s.lit = new Set(Arcade.shuffle([...s.tiles.keys()]).slice(0, count));
+    s.found = new Set();
+    s.state = 'show';
+    board.focus();
+    s.lit.forEach(i => s.tiles[i].classList.add('lit'));
+    say(`Watch closely… ${count} tiles are lighting up.`);
+    s.timer = setTimeout(recall, 1200 + count * 100);
+  }
+
+  function recall() {
+    s.tiles.forEach(t => t.classList.remove('lit'));
+    s.state = 'recall';
+    say(`Now find the ${s.lit.size} tiles that lit up.`);
+    setCursor(Math.floor(s.n / 2) * s.n + Math.floor(s.n / 2));
+  }
+
+  function pick(i) {
+    if (s.state !== 'recall' || s.found.has(i)) return;
+    const t = s.tiles[i];
+    if (s.lit.has(i)) {
+      s.found.add(i);
+      t.classList.add('hit');
+      t.setAttribute('aria-label', t.getAttribute('aria-label') + ', found');
+      const left = s.lit.size - s.found.size;
+      if (left) { say(`Correct! ${left} more ${left === 1 ? 'tile' : 'tiles'} to find.`); return; }
+      s.state = 'reveal';
+      s.level++;
+      say(`Nice! On to level ${s.level}.`);
+      $('best').textContent = Arcade.record(BEST_KEY, s.level - 1);
+      s.timer = setTimeout(round, reduced ? 600 : 900);
+    } else {
+      t.classList.add('miss');
+      s.lives--;
+      hud();
+      s.state = 'reveal';
+      s.lit.forEach(j => { if (!s.found.has(j)) s.tiles[j].classList.add('answer'); });
+      if (s.lives <= 0) {
+        s.timer = setTimeout(over, 1400);
+        say(`That tile wasn’t lit, and that was your last life. Here’s where the tiles were.`);
+      } else {
+        say(`That tile wasn’t lit. You have ${s.lives} ${s.lives === 1 ? 'life' : 'lives'} left. Here’s where the tiles were. Let’s try level ${s.level} again.`);
+        s.timer = setTimeout(round, 1600);
+      }
+    }
+  }
+
+  function over() {
+    s.state = 'over';
+    const reached = s.level - 1;
+    $('best').textContent = Arcade.record(BEST_KEY, reached);
+    const cleared = reached === 0 ? 'didn’t clear any levels' : `cleared ${reached} ${reached === 1 ? 'level' : 'levels'}`;
+    const verdict = reached > s.prevBest ? ' That’s a new best!' : '';
+    showOverlay('Game over', `You reached level ${s.level} and ${cleared}.${verdict}`, 'Play again');
+  }
+
+  function showOverlay(t, p, b) {
+    $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b;
+    $('ov').hidden = false; $('go').focus();
+  }
+
+  function start() {
+    if (s.state !== 'ready' && s.state !== 'over') return;
+    s.level = 1; s.lives = 3;
+    s.prevBest = Arcade.best(BEST_KEY);
+    $('ov').hidden = true;
+    round();
+  }
+
+  const MOVES = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] };
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (!$('ov').hidden) {
+      // preventDefault stops the focused button's synthetic click, so start() runs once.
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); start(); }
+      return;
+    }
+    if (MOVES[e.key]) {
+      e.preventDefault();
+      if (s.state !== 'recall') return;
+      const [dx, dy] = MOVES[e.key];
+      const x = Math.min(s.n - 1, Math.max(0, s.cur % s.n + dx));
+      const y = Math.min(s.n - 1, Math.max(0, Math.floor(s.cur / s.n) + dy));
+      setCursor(y * s.n + x);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      // Handled here rather than via native button click so keys work even if focus drifted.
+      e.preventDefault();
+      if (!e.repeat) pick(s.cur);
+    }
+  });
+  $('go').addEventListener('click', start);
+
+  build();
+})();
+</script>

@@ -1,0 +1,379 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Trivia Rush</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: cabinet with HUD, then a question panel (meta row, timer bar, question, 2x2 choices). */
+  :root { --accent: #ffd166; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 340px; }
+  .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #streak { color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--ground); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  .bar i.low { background: var(--danger); }
+  #q { margin: 0; font-size: 1.1rem; line-height: 1.45; font-weight: 600; min-height: 3em; outline: none; }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.85rem; color: var(--muted); }
+  #fb.right { color: var(--good); }
+  #fb.wrong { color: var(--danger); }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+</style>
+
+<div class="cab">
+  <h1>Trivia Rush</h1>
+  <p class="rule">Answer general knowledge questions before time runs out. Faster answers and streaks of correct answers earn more points, and three wrong answers end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Question 1</span><span id="streak"></span></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <p id="q" tabindex="-1">Your first question will appear here.</p>
+    <div class="choices" id="choices"></div>
+    <p id="fb" aria-live="polite"></p>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">You have 15 seconds to answer each question. Click an answer, or press 1–4 or A–D to choose it.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Choose an answer with <kbd>1</kbd>–<kbd>4</kbd> or <kbd>A</kbd>–<kbd>D</kbd>, and press <kbd>Enter</kbd> to start a game or move on to the next question. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const KEY = 'triviaRushBest', TIME = 15000, LIVES = 3, REVEAL_MS = 1200;
+
+  // [question, correct, wrong, wrong, wrong]
+  const BANK = [
+    ['What is the chemical symbol for gold?', 'Au', 'Ag', 'Gd', 'Go'],
+    ['Which planet is known as the Red Planet?', 'Mars', 'Venus', 'Jupiter', 'Mercury'],
+    ['Which gas do plants absorb from the air for photosynthesis?', 'Carbon dioxide', 'Oxygen', 'Nitrogen', 'Hydrogen'],
+    ['How many bones are in the adult human body?', '206', '186', '212', '230'],
+    ['Roughly how fast does light travel in a vacuum?', '300,000 km/s', '150,000 km/s', '30,000 km/s', '3,000,000 km/s'],
+    ['What is the most abundant gas in Earth\'s atmosphere?', 'Nitrogen', 'Oxygen', 'Argon', 'Carbon dioxide'],
+    ['What is the chemical formula for table salt?', 'NaCl', 'KCl', 'NaOH', 'CaCl₂'],
+    ['What is the largest planet in the Solar System?', 'Jupiter', 'Saturn', 'Neptune', 'Uranus'],
+    ['At sea level, water boils at what temperature in Fahrenheit?', '212 °F', '100 °F', '180 °F', '232 °F'],
+    ['Who developed the theory of general relativity?', 'Albert Einstein', 'Isaac Newton', 'Niels Bohr', 'Stephen Hawking'],
+    ['What is the pH of pure water at 25 °C?', '7', '0', '5', '14'],
+    ['Which organ produces insulin?', 'Pancreas', 'Liver', 'Kidney', 'Spleen'],
+    ['Which element has atomic number 1?', 'Hydrogen', 'Helium', 'Lithium', 'Carbon'],
+    ['As of 2025, which planet has the most known moons?', 'Saturn', 'Jupiter', 'Uranus', 'Neptune'],
+    ['What part of the cell contains most of its DNA?', 'Nucleus', 'Ribosome', 'Cell membrane', 'Vacuole'],
+    ['What force keeps the planets in orbit around the Sun?', 'Gravity', 'Magnetism', 'Friction', 'Inertia'],
+    ['What is the capital of Australia?', 'Canberra', 'Sydney', 'Melbourne', 'Perth'],
+    ['What is the largest ocean on Earth?', 'Pacific', 'Atlantic', 'Indian', 'Arctic'],
+    ['What is the capital of Canada?', 'Ottawa', 'Toronto', 'Montreal', 'Vancouver'],
+    ['Mount Everest sits on the border between Nepal and which country?', 'China', 'India', 'Bhutan', 'Pakistan'],
+    ['What is the largest hot desert in the world?', 'Sahara', 'Arabian', 'Gobi', 'Kalahari'],
+    ['What is the smallest country in the world by area?', 'Vatican City', 'Monaco', 'San Marino', 'Liechtenstein'],
+    ['What is the capital of Turkey?', 'Ankara', 'Istanbul', 'Izmir', 'Bursa'],
+    ['The Strait of Gibraltar separates Spain from which country?', 'Morocco', 'Algeria', 'Tunisia', 'Portugal'],
+    ['The Danube river flows into which sea?', 'Black Sea', 'Adriatic Sea', 'Baltic Sea', 'Caspian Sea'],
+    ['What is the capital of New Zealand?', 'Wellington', 'Auckland', 'Christchurch', 'Hamilton'],
+    ['In which country is Machu Picchu located?', 'Peru', 'Bolivia', 'Chile', 'Ecuador'],
+    ['What is the largest country by area?', 'Russia', 'Canada', 'China', 'United States'],
+    ['What is the capital of Brazil?', 'Brasília', 'Rio de Janeiro', 'São Paulo', 'Salvador'],
+    ['Lake Titicaca lies on the border of Peru and which country?', 'Bolivia', 'Chile', 'Argentina', 'Colombia'],
+    ['In which country is the city of Marrakesh?', 'Morocco', 'Tunisia', 'Egypt', 'Algeria'],
+    ['What is the longest river in South America?', 'Amazon', 'Paraná', 'Orinoco', 'São Francisco'],
+    ['What is the currency of Japan?', 'Yen', 'Won', 'Yuan', 'Ringgit'],
+    ['In what year did World War II end?', '1945', '1944', '1946', '1939'],
+    ['Who was the first person to walk on the Moon?', 'Neil Armstrong', 'Buzz Aldrin', 'Yuri Gagarin', 'John Glenn'],
+    ['In what year did the Berlin Wall fall?', '1989', '1991', '1987', '1985'],
+    ['Who was the first Roman emperor?', 'Augustus', 'Julius Caesar', 'Nero', 'Caligula'],
+    ['Which ship sank in 1912 after hitting an iceberg?', 'Titanic', 'Lusitania', 'Britannic', 'Olympic'],
+    ['Who was the first President of the United States?', 'George Washington', 'Thomas Jefferson', 'John Adams', 'Abraham Lincoln'],
+    ['Which of the Seven Wonders of the Ancient World still stands?', 'Great Pyramid of Giza', 'Lighthouse of Alexandria', 'Colossus of Rhodes', 'Hanging Gardens of Babylon'],
+    ['Which civilization built Machu Picchu?', 'Inca', 'Aztec', 'Maya', 'Olmec'],
+    ['In what year did Columbus first reach the Americas?', '1492', '1498', '1488', '1501'],
+    ['Who was the British Prime Minister for most of World War II?', 'Winston Churchill', 'Neville Chamberlain', 'Clement Attlee', 'Anthony Eden'],
+    ['In what year did the French Revolution begin?', '1789', '1776', '1799', '1815'],
+    ['At which battle was Napoleon finally defeated in 1815?', 'Waterloo', 'Austerlitz', 'Trafalgar', 'Leipzig'],
+    ['Which empire was ruled from Constantinople until 1453?', 'Byzantine Empire', 'Ottoman Empire', 'Persian Empire', 'Holy Roman Empire'],
+    ['Who painted the Mona Lisa?', 'Leonardo da Vinci', 'Michelangelo', 'Raphael', 'Botticelli'],
+    ['Who wrote "Romeo and Juliet"?', 'William Shakespeare', 'Christopher Marlowe', 'Charles Dickens', 'John Milton'],
+    ['Who wrote the novel "1984"?', 'George Orwell', 'Aldous Huxley', 'Ray Bradbury', 'H. G. Wells'],
+    ['Who painted "The Starry Night"?', 'Vincent van Gogh', 'Claude Monet', 'Paul Gauguin', 'Paul Cézanne'],
+    ['Who composed the "Moonlight Sonata"?', 'Ludwig van Beethoven', 'Wolfgang Amadeus Mozart', 'Frédéric Chopin', 'Johann Sebastian Bach'],
+    ['How many keys does a standard piano have?', '88', '76', '92', '100'],
+    ['Who wrote "Pride and Prejudice"?', 'Jane Austen', 'Charlotte Brontë', 'George Eliot', 'Charles Dickens'],
+    ['Which band released the album "Abbey Road"?', 'The Beatles', 'The Rolling Stones', 'Pink Floyd', 'The Who'],
+    ['Who painted the ceiling of the Sistine Chapel?', 'Michelangelo', 'Raphael', 'Leonardo da Vinci', 'Titian'],
+    ['Who wrote "Don Quixote"?', 'Miguel de Cervantes', 'Lope de Vega', 'Gabriel García Márquez', 'Jorge Luis Borges'],
+    ['Which language has the most native speakers?', 'Mandarin Chinese', 'Spanish', 'English', 'Hindi'],
+    ['In which city is the Louvre museum?', 'Paris', 'Rome', 'Madrid', 'Vienna'],
+    ['Which artist is famous for cutting off part of his own ear?', 'Vincent van Gogh', 'Pablo Picasso', 'Salvador Dalí', 'Edvard Munch'],
+    ['In soccer, how many players does each team have on the field?', '11', '10', '9', '12'],
+    ['How many rings are on the Olympic flag?', '5', '4', '6', '7'],
+    ['Which country won the first FIFA World Cup in 1930?', 'Uruguay', 'Argentina', 'Brazil', 'Italy'],
+    ['How long is a marathon?', '42.195 km', '40 km', '45 km', '38.5 km'],
+    ['Which tennis Grand Slam is played on grass?', 'Wimbledon', 'French Open', 'US Open', 'Australian Open'],
+    ['Which sport uses a shuttlecock?', 'Badminton', 'Squash', 'Table tennis', 'Volleyball'],
+    ['In basketball, how many points is a shot from behind the arc worth?', '3', '2', '4', '1'],
+    ['In which country did judo originate?', 'Japan', 'China', 'Korea', 'Brazil'],
+    ['How many holes are in a standard round of golf?', '18', '9', '12', '21'],
+    ['In chess, which piece can only move diagonally?', 'Bishop', 'Rook', 'Knight', 'King'],
+    ['What is the largest mammal on Earth?', 'Blue whale', 'African elephant', 'Sperm whale', 'Giraffe'],
+    ['What is the fastest land animal?', 'Cheetah', 'Pronghorn', 'Lion', 'Greyhound'],
+    ['How many legs does a spider have?', '8', '6', '10', '12'],
+    ['What is a group of lions called?', 'A pride', 'A pack', 'A herd', 'A troop'],
+    ['What is the largest living bird?', 'Ostrich', 'Emu', 'Albatross', 'Andean condor'],
+    ['Which species holds the record for the tallest living tree?', 'Coast redwood', 'Giant sequoia', 'Douglas fir', 'Mountain ash'],
+    ['How many hearts does an octopus have?', '3', '1', '2', '4'],
+    ['Which of these animals is a mammal?', 'Bat', 'Penguin', 'Shark', 'Lizard'],
+    ['What do caterpillars turn into?', 'Butterflies or moths', 'Beetles', 'Dragonflies', 'Bees'],
+    ['What is the main ingredient in guacamole?', 'Avocado', 'Pea', 'Lime', 'Cucumber'],
+    ['Feta cheese traditionally comes from which country?', 'Greece', 'Italy', 'Turkey', 'France'],
+    ['Saffron comes from which flower?', 'Crocus', 'Tulip', 'Lily', 'Marigold'],
+    ['Paella is a traditional dish from which country?', 'Spain', 'Italy', 'Portugal', 'Mexico'],
+    ['Which nut is the main ingredient in marzipan?', 'Almond', 'Hazelnut', 'Walnut', 'Cashew'],
+    ['Which vegetable is used to make sauerkraut?', 'Cabbage', 'Cucumber', 'Onion', 'Turnip'],
+    ['Wasabi is traditionally served with which Japanese dish?', 'Sushi', 'Ramen', 'Tempura', 'Udon'],
+    ['What does CPU stand for?', 'Central Processing Unit', 'Central Program Utility', 'Computer Personal Unit', 'Core Processing Utility'],
+    ['Who co-founded Apple with Steve Jobs in 1976?', 'Steve Wozniak', 'Bill Gates', 'Paul Allen', 'Larry Page'],
+    ['What does the HTTP status code 404 mean?', 'Not Found', 'Forbidden', 'Internal Server Error', 'Moved Permanently'],
+    ['What is binary 1010 in decimal?', '10', '8', '12', '5'],
+    ['In what year was the first iPhone released?', '2007', '2005', '2008', '2010'],
+    ['Which programming language is named after a British comedy group?', 'Python', 'Ruby', 'Perl', 'Java'],
+    ['How many bits are in a byte?', '8', '4', '16', '10'],
+    ['Who is often called the first computer programmer?', 'Ada Lovelace', 'Alan Turing', 'Charles Babbage', 'Grace Hopper'],
+    ['Who invented the World Wide Web?', 'Tim Berners-Lee', 'Vint Cerf', 'Bill Gates', 'Marc Andreessen'],
+    ['What is the hardest naturally occurring substance?', 'Diamond', 'Quartz', 'Topaz', 'Corundum'],
+    ['Which element has the chemical symbol Fe?', 'Iron', 'Fluorine', 'Lead', 'Francium'],
+    ['At sea level, water freezes at what temperature in Celsius?', '0 °C', '4 °C', '−10 °C', '32 °C'],
+    ['Which blood cells carry oxygen around the body?', 'Red blood cells', 'White blood cells', 'Platelets', 'Plasma cells'],
+    ['Which scientist formulated the three laws of motion?', 'Isaac Newton', 'Galileo Galilei', 'Johannes Kepler', 'Albert Einstein'],
+    ['What is the chemical formula for water?', 'H₂O', 'H₂O₂', 'CO₂', 'HO₂'],
+    ['Which vitamin does the skin produce when it is exposed to sunlight?', 'Vitamin D', 'Vitamin A', 'Vitamin C', 'Vitamin K'],
+    ['What is the largest organ of the human body?', 'Skin', 'Liver', 'Brain', 'Lungs'],
+    ['Which noble gas gives classic advertising signs their red-orange glow?', 'Neon', 'Argon', 'Krypton', 'Xenon'],
+    ['What unit is used to measure electrical resistance?', 'Ohm', 'Volt', 'Ampere', 'Watt'],
+    ['Who discovered penicillin in 1928?', 'Alexander Fleming', 'Louis Pasteur', 'Joseph Lister', 'Edward Jenner'],
+    ['How many chromosomes does a typical human body cell contain?', '46', '23', '44', '48'],
+    ['Which of these metals is a liquid at room temperature?', 'Mercury', 'Lead', 'Tin', 'Aluminum'],
+    ['What is the capital of Kenya?', 'Nairobi', 'Mombasa', 'Kampala', 'Addis Ababa'],
+    ['What is the longest river in Africa?', 'Nile', 'Congo', 'Niger', 'Zambezi'],
+    ['Which country has the largest population in South America?', 'Brazil', 'Argentina', 'Colombia', 'Peru'],
+    ['What is the capital of Norway?', 'Oslo', 'Bergen', 'Stockholm', 'Copenhagen'],
+    ['Which mountain range in Russia is traditionally seen as the boundary between Europe and Asia?', 'Ural Mountains', 'Caucasus Mountains', 'Carpathian Mountains', 'Altai Mountains'],
+    ['Which African country has the largest population?', 'Nigeria', 'Ethiopia', 'Egypt', 'South Africa'],
+    ['In which country are the ancient rock-cut ruins of Petra?', 'Jordan', 'Egypt', 'Lebanon', 'Syria'],
+    ['What is the capital of Argentina?', 'Buenos Aires', 'Córdoba', 'Montevideo', 'Santiago'],
+    ['Which strait separates Asia from North America?', 'Bering Strait', 'Strait of Magellan', 'Davis Strait', 'Strait of Hormuz'],
+    ['Not counting Australia, which is the largest island in the world?', 'Greenland', 'New Guinea', 'Borneo', 'Madagascar'],
+    ['Which U.S. state is the largest by area?', 'Alaska', 'Texas', 'California', 'Montana'],
+    ['What is the deepest lake in the world?', 'Lake Baikal', 'Lake Tanganyika', 'Lake Superior', 'Lake Victoria'],
+    ['Which Roman city was buried by the eruption of Mount Vesuvius in AD 79?', 'Pompeii', 'Carthage', 'Ostia', 'Ravenna'],
+    ['Who was the first woman to win a Nobel Prize?', 'Marie Curie', 'Rosalind Franklin', 'Dorothy Hodgkin', 'Lise Meitner'],
+    ['In what year did the United States declare its independence?', '1776', '1783', '1787', '1770'],
+    ['Which country gave the Statue of Liberty to the United States?', 'France', 'United Kingdom', 'Spain', 'Italy'],
+    ['Who led the Soviet Union during World War II?', 'Joseph Stalin', 'Vladimir Lenin', 'Nikita Khrushchev', 'Leon Trotsky'],
+    ['In what year was the Magna Carta sealed by King John of England?', '1215', '1066', '1314', '1415'],
+    ['Howard Carter found which pharaoh’s nearly intact tomb in 1922?', 'Tutankhamun', 'Ramesses II', 'Khufu', 'Akhenaten'],
+    ['Which Roman emperor ordered a wall built across northern Britain starting in AD 122?', 'Hadrian', 'Trajan', 'Claudius', 'Marcus Aurelius'],
+    ['Who was the first person to travel into space?', 'Yuri Gagarin', 'Alan Shepard', 'John Glenn', 'Valentina Tereshkova'],
+    ['In what year did World War I begin?', '1914', '1912', '1916', '1918'],
+    ['Who led the Spanish expedition that set out in 1519 and became the first to sail around the world?', 'Ferdinand Magellan', 'Vasco da Gama', 'Francis Drake', 'Christopher Columbus'],
+    ['Which ancient poet is traditionally credited with writing "The Odyssey"?', 'Homer', 'Virgil', 'Sophocles', 'Ovid'],
+    ['Who wrote "One Hundred Years of Solitude"?', 'Gabriel García Márquez', 'Isabel Allende', 'Mario Vargas Llosa', 'Pablo Neruda'],
+    ['Who painted "The Persistence of Memory," with its melting clocks?', 'Salvador Dalí', 'René Magritte', 'Joan Miró', 'Max Ernst'],
+    ['Who wrote "Moby-Dick"?', 'Herman Melville', 'Nathaniel Hawthorne', 'Mark Twain', 'Edgar Allan Poe'],
+    ['In which city is Michelangelo’s original statue of David displayed?', 'Florence', 'Rome', 'Venice', 'Milan'],
+    ['Who wrote "War and Peace"?', 'Leo Tolstoy', 'Fyodor Dostoevsky', 'Anton Chekhov', 'Ivan Turgenev'],
+    ['Who painted "The Scream"?', 'Edvard Munch', 'Gustav Klimt', 'Egon Schiele', 'Wassily Kandinsky'],
+    ['In most of the Sherlock Holmes stories, who narrates the adventures?', 'Dr. Watson', 'Inspector Lestrade', 'Mycroft Holmes', 'Mrs. Hudson'],
+    ['Who wrote "Charlie and the Chocolate Factory"?', 'Roald Dahl', 'Lewis Carroll', 'C. S. Lewis', 'Beatrix Potter'],
+    ['Who painted "Girl with a Pearl Earring"?', 'Johannes Vermeer', 'Rembrandt', 'Frans Hals', 'Jan Steen'],
+    ['A traditional haiku has how many syllables in total?', '17', '14', '19', '21'],
+    ['How many lines are on a standard musical staff?', '5', '4', '6', '7'],
+    ['Which composer wrote "The Four Seasons"?', 'Antonio Vivaldi', 'Johann Sebastian Bach', 'George Frideric Handel', 'Joseph Haydn'],
+    ['The clarinet belongs to which family of instruments?', 'Woodwind', 'Brass', 'Percussion', 'Strings'],
+    ['Which singer was known as the "King of Pop"?', 'Michael Jackson', 'Elvis Presley', 'Prince', 'Stevie Wonder'],
+    ['Who composed the opera "The Magic Flute"?', 'Wolfgang Amadeus Mozart', 'Giuseppe Verdi', 'Richard Wagner', 'Giacomo Puccini'],
+    ['Which musical term means to play gradually louder?', 'Crescendo', 'Diminuendo', 'Staccato', 'Legato'],
+    ['Which country did the pop group ABBA come from?', 'Sweden', 'Norway', 'Denmark', 'Finland'],
+    ['How many strings does a standard classical guitar have?', '6', '4', '8', '12'],
+    ['Who directed the 1975 film "Jaws"?', 'Steven Spielberg', 'George Lucas', 'Martin Scorsese', 'Francis Ford Coppola'],
+    ['In the 1939 film "The Wizard of Oz," what color are Dorothy’s slippers?', 'Ruby red', 'Silver', 'Emerald green', 'Gold'],
+    ['Who directed the films "Titanic" (1997) and "Avatar" (2009)?', 'James Cameron', 'Ridley Scott', 'Peter Jackson', 'Christopher Nolan'],
+    ['In the original "Star Wars" trilogy, who turns out to be Luke Skywalker’s father?', 'Darth Vader', 'Obi-Wan Kenobi', 'Emperor Palpatine', 'Han Solo'],
+    ['Which animated film follows a clownfish searching for his missing son?', 'Finding Nemo', 'Shark Tale', 'The Little Mermaid', 'Moana'],
+    ['Which actor played Captain Jack Sparrow in the "Pirates of the Caribbean" films?', 'Johnny Depp', 'Orlando Bloom', 'Brad Pitt', 'Russell Crowe'],
+    ['The Hindi-language film industry known as Bollywood is mainly based in which city?', 'Mumbai', 'Delhi', 'Kolkata', 'Chennai'],
+    ['Which silent film star was famous for playing a character called the Tramp?', 'Charlie Chaplin', 'Buster Keaton', 'Harold Lloyd', 'Stan Laurel'],
+    ['Which film series is set partly at the wizarding school Hogwarts?', 'Harry Potter', 'The Chronicles of Narnia', 'The Lord of the Rings', 'Percy Jackson'],
+    ['Which studio made the 2001 animated film "Spirited Away"?', 'Studio Ghibli', 'Pixar', 'Toei Animation', 'DreamWorks Animation'],
+    ['In basketball, how many players from each team are on the court at once?', '5', '6', '7', '4'],
+    ['In which city were the first modern Olympic Games held in 1896?', 'Athens', 'Paris', 'London', 'Rome'],
+    ['In American football, how many points is a touchdown worth before any extra point?', '6', '7', '3', '5'],
+    ['As of 2025, which country had won the most men’s FIFA World Cup titles?', 'Brazil', 'Germany', 'Italy', 'Argentina'],
+    ['In tennis, what is a score of zero called?', 'Love', 'Nil', 'Duck', 'Zip'],
+    ['What is the highest possible score in a single game of ten-pin bowling?', '300', '200', '250', '400'],
+    ['In baseball, how many players does the fielding team have on the field?', '9', '8', '10', '11'],
+    ['In golf, what is a score of one stroke under par on a hole called?', 'Birdie', 'Eagle', 'Bogey', 'Albatross'],
+    ['Which city hosted the 2016 Summer Olympics?', 'Rio de Janeiro', 'Beijing', 'London', 'Tokyo'],
+    ['What is a baby kangaroo called?', 'A joey', 'A kid', 'A cub', 'A calf'],
+    ['What is the largest living species of big cat?', 'Tiger', 'Lion', 'Jaguar', 'Leopard'],
+    ['What do honeybees collect from flowers to make honey?', 'Nectar', 'Pollen', 'Sap', 'Dew'],
+    ['Which bird is the national bird of the United States?', 'Bald eagle', 'Golden eagle', 'Wild turkey', 'Peregrine falcon'],
+    ['What do giant pandas mainly eat?', 'Bamboo', 'Eucalyptus leaves', 'Pine needles', 'Ferns'],
+    ['What is the process called in which a tadpole changes into a frog?', 'Metamorphosis', 'Photosynthesis', 'Germination', 'Pollination'],
+    ['What is the largest species of shark?', 'Whale shark', 'Great white shark', 'Basking shark', 'Tiger shark'],
+    ['In which country do koalas live in the wild?', 'Australia', 'New Zealand', 'Indonesia', 'South Africa'],
+    ['What is the tallest living land animal?', 'Giraffe', 'African elephant', 'Moose', 'Ostrich'],
+    ['What is the main ingredient in hummus?', 'Chickpeas', 'Lentils', 'Fava beans', 'Black beans'],
+    ['Which Italian city is known as the home of the margherita pizza?', 'Naples', 'Rome', 'Milan', 'Florence'],
+    ['What kind of food is Brie?', 'Cheese', 'Bread', 'Sausage', 'Pastry'],
+    ['Kimchi is a traditional dish from which country?', 'Korea', 'Japan', 'China', 'Thailand'],
+    ['Which spice gives many curries their bright yellow color?', 'Turmeric', 'Cumin', 'Paprika', 'Cinnamon'],
+    ['What is tofu made from?', 'Soybeans', 'Rice', 'Chickpeas', 'Wheat'],
+    ['Which fruit is dried to make raisins?', 'Grapes', 'Plums', 'Figs', 'Dates'],
+    ['What does URL stand for?', 'Uniform Resource Locator', 'Universal Resource Link', 'Uniform Routing Language', 'Unified Remote Locator'],
+    ['What does RAM stand for?', 'Random Access Memory', 'Read Access Memory', 'Rapid Action Memory', 'Runtime Allocation Module'],
+    ['Which company makes the Windows operating system?', 'Microsoft', 'Apple', 'IBM', 'Google'],
+    ['What is the hexadecimal number FF in decimal?', '255', '256', '240', '15'],
+    ['Who co-founded Microsoft with Bill Gates in 1975?', 'Paul Allen', 'Steve Ballmer', 'Steve Wozniak', 'Gordon Moore'],
+    ['What does HTML stand for?', 'HyperText Markup Language', 'HyperText Machine Language', 'High Transfer Markup Language', 'Hyperlink Text Management Language'],
+    ['What does GPS stand for?', 'Global Positioning System', 'General Positioning Service', 'Geographic Pointing System', 'Global Path Satellite'],
+    ['Which British mathematician proposed a famous test of machine intelligence in 1950?', 'Alan Turing', 'John von Neumann', 'Claude Shannon', 'Charles Babbage'],
+    ['What is the official language of Brazil?', 'Portuguese', 'Spanish', 'French', 'Italian'],
+    ['What is a word or phrase that reads the same backward and forward called?', 'A palindrome', 'An anagram', 'A homophone', 'An acronym'],
+    ['How many letters are in the modern English alphabet?', '26', '24', '25', '28'],
+    ['Which alphabet is used to write Russian?', 'Cyrillic', 'Latin', 'Greek', 'Arabic'],
+    ['What is a word with the opposite meaning of another word called?', 'An antonym', 'A synonym', 'A homonym', 'A pseudonym'],
+    ['What does the Latin phrase "carpe diem" mean?', 'Seize the day', 'Time flies', 'Know yourself', 'Peace be with you'],
+    ['In which script is Hindi usually written?', 'Devanagari', 'Arabic', 'Cyrillic', 'Tamil'],
+    ['Which planet is closest to the Sun?', 'Mercury', 'Venus', 'Mars', 'Earth'],
+    ['What is the name of the galaxy that contains our Solar System?', 'Milky Way', 'Andromeda', 'Triangulum', 'Whirlpool'],
+    ['Roughly how long does light from the Sun take to reach Earth?', 'About 8 minutes', 'About 8 seconds', 'About 1 hour', 'About 1 day'],
+    ['What is the hottest planet in the Solar System?', 'Venus', 'Mercury', 'Mars', 'Jupiter'],
+    ['Which space telescope, launched in 1990, was repaired and upgraded by astronauts on several missions?', 'Hubble Space Telescope', 'James Webb Space Telescope', 'Kepler Space Telescope', 'Spitzer Space Telescope'],
+    ['What was the name of the first artificial satellite, launched in 1957?', 'Sputnik 1', 'Explorer 1', 'Vostok 1', 'Luna 1'],
+    ['Which world was reclassified from a planet to a dwarf planet in 2006?', 'Pluto', 'Ceres', 'Eris', 'Makemake'],
+    ['Which NASA rover landed on Mars in February 2021?', 'Perseverance', 'Curiosity', 'Opportunity', 'Spirit'],
+    ['Which volcano on Mars is the largest known volcano in the Solar System?', 'Olympus Mons', 'Elysium Mons', 'Arsia Mons', 'Pavonis Mons'],
+    ['After the Sun, which star is closest to Earth?', 'Proxima Centauri', 'Sirius', 'Betelgeuse', 'Polaris'],
+  ].map(([q, a, ...w]) => ({ q, a, w }));
+
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, streak: 0, n: 0, queue: [], cur: null, t0: 0, timer: 0 };
+  $('best').textContent = best;
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function hud() {
+    $('score').textContent = s.score;
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', `${s.lives} ${s.lives === 1 ? 'life' : 'lives'}`);
+    $('streak').textContent = s.streak > 1 ? `${s.streak} in a row (×${mult().toFixed(2).replace(/\.?0+$/, '')} points)` : '';
+  }
+  const mult = () => 1 + 0.25 * Math.min(Math.max(s.streak - 1, 0), 8);
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, streak: 0, n: 0, queue: Arcade.shuffle([...BANK]) });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function next() {
+    if (!s.queue.length) s.queue = Arcade.shuffle([...BANK]);
+    s.cur = s.queue.pop();
+    s.n++;
+    const opts = Arcade.shuffle([s.cur.a, ...s.cur.w]);
+    $('num').textContent = `Question ${s.n}`;
+    $('q').textContent = s.cur.q;
+    $('fb').textContent = ''; $('fb').className = '';
+    const box = $('choices');
+    box.innerHTML = '';
+    opts.forEach((o, i) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'choice';
+      b.innerHTML = `<kbd>${i + 1}</kbd><span></span>`;
+      b.querySelector('span').textContent = o;
+      b.dataset.v = o;
+      b.addEventListener('click', () => answer(i));
+      box.append(b);
+    });
+    s.state = 'ask';
+    s.t0 = performance.now();
+    $('q').focus();
+    tick();
+  }
+
+  function tick() {
+    cancelAnimationFrame(s.timer);
+    if (s.state !== 'ask') return;
+    const left = Math.max(0, TIME - (performance.now() - s.t0));
+    const bar = $('bar');
+    bar.style.transform = `scaleX(${left / TIME})`;
+    bar.classList.toggle('low', left < 4000);
+    if (left <= 0) return answer(-1);
+    s.timer = requestAnimationFrame(tick);
+  }
+
+  function answer(i) {
+    if (s.state !== 'ask') return;
+    cancelAnimationFrame(s.timer);
+    s.state = 'reveal';
+    const btns = [...$('choices').children];
+    const pick = btns[i];
+    const right = pick && pick.dataset.v === s.cur.a;
+    btns.forEach(b => { if (b.dataset.v === s.cur.a) b.classList.add('right'); });
+    const fb = $('fb');
+    if (right) {
+      s.streak++;
+      const left = Math.max(0, TIME - (performance.now() - s.t0));
+      const pts = Math.round((100 + Math.round(left / TIME * 100)) * mult());
+      s.score += pts;
+      fb.textContent = `Correct! +${pts.toLocaleString('en-US')} points.`; fb.className = 'right';
+    } else {
+      if (pick) pick.classList.add('wrong');
+      s.streak = 0; s.lives--;
+      fb.textContent = `${pick ? 'Not quite' : 'Time’s up'}. The answer was ${s.cur.a}${/[.!?]$/.test(s.cur.a) ? '' : '.'}`; fb.className = 'wrong';
+    }
+    hud();
+    clearTimeout(s.adv);
+    s.adv = setTimeout(advance, right ? REVEAL_MS : REVEAL_MS * 1.6);
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    clearTimeout(s.adv);
+    if (s.lives > 0) return next();
+    s.state = 'over';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = best;
+    showOverlay('Game over', `You scored ${s.score.toLocaleString('en-US')} points in ${s.n} ${s.n === 1 ? 'question' : 'questions'}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${best.toLocaleString('en-US')}.` : '')}`, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const k = e.key.toLowerCase();
+    if (s.state === 'ask') {
+      const i = '1234'.indexOf(k) >= 0 ? '1234'.indexOf(k) : 'abcd'.indexOf(k);
+      if (i >= 0 && k.length === 1) { e.preventDefault(); answer(i); }
+    } else if (s.state === 'reveal' && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault(); advance();
+    } else if ((s.state === 'ready' || s.state === 'over') && e.key === 'Enter') {
+      e.preventDefault(); start();
+    }
+  });
+  $('go').addEventListener('click', start);
+  $('go').focus();
+})();
+</script>

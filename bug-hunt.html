@@ -1,0 +1,307 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Bug Hunt</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: wide cabinet; panel holds meta row, timer bar, task line, code listing, step prompt, choices and feedback. */
+  :root { --accent: #f07178; }
+  .cab { max-width: 800px; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 12px; min-height: 520px; }
+  .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #streak { color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--ground); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  .bar i.low { background: var(--danger); }
+  #q { margin: 0; font-size: 1rem; line-height: 1.45; font-weight: 600; }
+
+  .code {
+    background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    overflow-x: auto; padding: 6px 0; font-size: 0.85rem; line-height: 1.6; outline: none;
+  }
+  .code:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .lines { display: inline-block; min-width: 100%; }
+  .ln { display: flex; white-space: pre; cursor: pointer; padding-right: 12px; }
+  .ln .no { flex: none; width: 3.2em; padding-right: 0.9em; text-align: right; color: var(--muted); user-select: none; opacity: 0.7; }
+  .ln .tx { flex: 1; }
+  .ln.cur { outline: 3px solid var(--accent); outline-offset: -3px; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .ln.bad { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+  .ln.miss { outline: 2px dashed var(--danger); outline-offset: -2px; }
+  .ln.fixrow { background: color-mix(in srgb, var(--good) 22%, transparent); cursor: default; }
+  .ln.fixrow .no { color: var(--good); opacity: 1; }
+  .code.done .ln { cursor: default; }
+  .tk-k { color: #c792ea; }
+  .tk-s { color: #c3e88d; }
+  .tk-n { color: #f78c6c; }
+  .tk-c { color: var(--muted); font-style: italic; }
+
+  #ask { margin: 0; font-size: 0.85rem; color: var(--muted); line-height: 1.5; }
+  .choices { grid-template-columns: 1fr; }
+  .choice { min-height: 44px; font-size: 0.85rem; }
+  .choice:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.9rem; font-weight: 600; color: var(--muted); }
+  #fb.right { color: var(--good); }
+  #fb.part { color: var(--food); }
+  #fb.wrong { color: var(--danger); }
+  #why { margin: 0; font-size: 0.85rem; line-height: 1.55; color: var(--ink); }
+  #next { align-self: flex-start; }
+  #next:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="cab">
+  <h1>Bug Hunt</h1>
+  <p class="rule">Each code snippet has exactly one buggy line. Find the line, then choose what is wrong with it to earn full points and build a streak bonus, and remember that three misses end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Snippet 1</span><span id="streak"></span><span id="secs"></span></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <p id="q">The snippet’s goal will appear here.</p>
+    <div class="code" id="code" tabindex="0" role="listbox" aria-label="Code listing"><div class="lines" id="lines"></div></div>
+    <p id="ask"></p>
+    <div class="choices" id="choices"></div>
+    <p id="fb" aria-live="polite"></p>
+    <p id="why"></p>
+    <button id="next" type="button" hidden>Next snippet</button>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Move the cursor to the buggy line with the arrow keys and press Enter, then press a number key to choose what is wrong. You have 60 seconds for each snippet.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Use <kbd>↑</kbd> and <kbd>↓</kbd> to move between lines, <kbd>Enter</kbd> to pick a line or continue, and <kbd>1</kbd>–<kbd>4</kbd> to choose an explanation. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const KEY = 'bugHuntBest', TIME = 60000, LIVES = 3, PARTIAL = 40;
+
+  // Each snippet: lang, lvl (1 beginner, 2 intermediate), desc, code, bug (1-based line), fix, why (first is correct), explain.
+  // Every buggy and fixed version was checked with node, Python or SQLite before being added.
+  const BANK = /*BANK*/[{"id": "js-loop-end", "lang": "js", "lvl": 1, "desc": "Add up all the numbers in an array.", "code": "function sum(nums) {\n  let total = 0;\n  for (let i = 0; i <= nums.length; i++) {\n    total += nums[i];\n  }\n  return total;\n}", "bug": 3, "fix": "  for (let i = 0; i < nums.length; i++) {", "why": ["The loop condition uses <= instead of <, so the last pass reads nums[nums.length], which is undefined and turns the total into NaN.", "The variable total should be declared with const instead of let.", "The += operator joins the numbers together as text instead of adding them.", "The return statement belongs inside the loop so that it returns each running total."], "explain": "Array indexes run from 0 to length minus 1, so the loop has to stop while i is still less than nums.length."}, {"id": "js-assign-if", "lang": "js", "lvl": 1, "desc": "Add \u201c(administrator)\u201d to the greeting, but only for admins.", "code": "function greet(user) {\n  let message = \"Hello, \" + user.name;\n  if (user.role = \"admin\") {\n    message += \" (administrator)\";\n  }\n  return message;\n}", "bug": 3, "fix": "  if (user.role === \"admin\") {", "why": ["A single = assigns \"admin\" to user.role instead of comparing, and the non-empty string is truthy, so every user is treated as an admin.", "Strings must be joined with concat() instead of +.", "The += operator cannot be used on strings.", "The variable message should be declared with var so the if block can change it."], "explain": "Use === to compare values; = always assigns."}, {"id": "js-sort-numbers", "lang": "js", "lvl": 1, "desc": "Return a copy of the scores sorted from lowest to highest.", "code": "const scores = [40, 100, 5, 25];\n\nfunction sortScores(list) {\n  const copy = list.slice();\n  copy.sort();\n  return copy;\n}\n\nconsole.log(sortScores(scores));", "bug": 5, "fix": "  copy.sort((a, b) => a - b);", "why": ["Without a compare function, sort() compares the values as strings, so 100 comes before 25 and 5.", "slice() does not copy the array, so the original list is sorted too.", "sort() returns a new array, and the result is thrown away.", "sort() only works on arrays of strings and throws an error on numbers."], "explain": "Pass a numeric comparator such as (a, b) => a - b to sort numbers by value."}, {"id": "js-missing-await", "lang": "js", "lvl": 2, "desc": "Look up a user and return their name.", "code": "async function fetchUser(id) {\n  return { id, name: \"Mia\" };\n}\n\nasync function userName(id) {\n  const user = fetchUser(id);\n  return user.name;\n}", "bug": 6, "fix": "  const user = await fetchUser(id);", "why": ["fetchUser is async and returns a promise, so without await, user is a promise and user.name is undefined.", "The shorthand { id } is not valid inside an object literal.", "An async function cannot return a plain object.", "userName must not be async because it returns a string."], "explain": "Await the promise to get the user object before reading its properties."}, {"id": "js-no-return", "lang": "js", "lvl": 1, "desc": "Return the average of a list of numbers, or 0 for an empty list.", "code": "function average(nums) {\n  if (nums.length === 0) {\n    return 0;\n  }\n  const total = nums.reduce((a, b) => a + b, 0);\n  total / nums.length;\n}", "bug": 6, "fix": "  return total / nums.length;", "why": ["The average is calculated but never returned, so the function returns undefined.", "reduce() needs a starting value of 1, not 0, when adding.", "Dividing by nums.length always rounds down to a whole number.", "The early return for an empty list stops the function for every input."], "explain": "A function without a return statement returns undefined, so the last line needs return."}, {"id": "js-var-closure", "lang": "js", "lvl": 2, "desc": "Create one handler per button that reports its own button number.", "code": "function makeHandlers(count) {\n  const handlers = [];\n  for (var i = 0; i < count; i++) {\n    handlers.push(() => \"Button \" + i);\n  }\n  return handlers;\n}", "bug": 3, "fix": "  for (let i = 0; i < count; i++) {", "why": ["var creates a single i shared by every handler, so they all report the final value, count.", "Arrow functions cannot be stored in an array.", "The handlers array is declared with const, so push() fails.", "The loop starts at 0, so the first handler reports an undefined button."], "explain": "With let, each loop iteration gets its own i, so every handler remembers its own number."}, {"id": "js-float-equal", "lang": "js", "lvl": 1, "desc": "Check whether the prices add up to the expected total.", "code": "function isExactTotal(prices, expected) {\n  let total = 0;\n  for (const p of prices) {\n    total += p;\n  }\n  return total === expected;\n}", "bug": 6, "fix": "  return Math.abs(total - expected) < 1e-9;", "why": ["Floating-point sums are not exact, so 0.1 + 0.2 is 0.30000000000000004 and the === test fails.", "for...of loops over the indexes of an array, not its values.", "total should start at 1 so the first price is counted.", "=== compares types only, so any two numbers count as equal."], "explain": "Compare decimal results with a small tolerance, or work in whole cents."}, {"id": "js-string-plus", "lang": "js", "lvl": 1, "desc": "Add the quantity typed in a form field to the item count.", "code": "const cart = { count: 2 };\nconst field = { value: \"3\" }; // text from an input box\n\nfunction addItems(cart, field) {\n  const added = cart.count + field.value;\n  cart.count = added;\n  return cart.count;\n}", "bug": 5, "fix": "  const added = cart.count + Number(field.value);", "why": ["field.value is a string, so + joins the values as text and the count becomes \"23\" instead of 5.", "cart is a const, so its count property cannot be changed.", "The function parameters hide the outer variables, which is not allowed.", "The return statement returns the old count instead of the new one."], "explain": "Convert text input with Number() before doing arithmetic with it."}, {"id": "js-nan-check", "lang": "js", "lvl": 1, "desc": "Collect the values that cannot be turned into numbers.", "code": "function invalidValues(values) {\n  const bad = [];\n  for (const v of values) {\n    const n = Number(v);\n    if (n === NaN) {\n      bad.push(v);\n    }\n  }\n  return bad;\n}", "bug": 5, "fix": "    if (Number.isNaN(n)) {", "why": ["NaN is never equal to anything, not even NaN, so this test is always false.", "Number() throws an error for text that is not a number.", "push() adds items to the front of the array.", "const cannot be used inside a loop body."], "explain": "Use Number.isNaN(n) to detect NaN."}, {"id": "js-missing-break", "lang": "js", "lvl": 1, "desc": "Return the shipping cost for a delivery zone.", "code": "function shippingCost(zone) {\n  let cost;\n  switch (zone) {\n    case \"local\": cost = 5;\n    case \"national\": cost = 10; break;\n    case \"international\": cost = 25; break;\n    default: cost = 0;\n  }\n  return cost;\n}", "bug": 4, "fix": "    case \"local\": cost = 5; break;", "why": ["The local case has no break, so it falls through into the national case and the cost becomes 10.", "switch compares with ==, so \"local\" also matches \"national\".", "The default case must come first in a switch.", "cost is declared without a value, so it stays undefined."], "explain": "Each case needs a break (or return) unless falling through is intended."}, {"id": "js-shadow", "lang": "js", "lvl": 2, "desc": "Return the largest number in the list.", "code": "function findMax(nums) {\n  let max = -Infinity;\n  for (const n of nums) {\n    if (n > max) {\n      let max = n;\n    }\n  }\n  return max;\n}", "bug": 5, "fix": "      max = n;", "why": ["let max declares a new variable that only exists inside the if block, so the outer max never changes.", "-Infinity is not a valid starting value in JavaScript.", "The > comparison should be >= to find the largest number.", "for...of cannot be used with const."], "explain": "Assign to the existing variable instead of declaring a new one with the same name."}, {"id": "js-loose-equal", "lang": "js", "lvl": 2, "desc": "Describe a value as empty (for an empty string), zero, or other.", "code": "function describe(value) {\n  if (value == \"\") {\n    return \"empty\";\n  }\n  if (value === 0) {\n    return \"zero\";\n  }\n  return \"other\";\n}", "bug": 2, "fix": "  if (value === \"\") {", "why": ["== converts types before comparing, and 0 == \"\" is true, so 0 is reported as empty.", "The second if can never run because === is not allowed with numbers.", "An empty string cannot be written as \"\" in JavaScript.", "A function may only contain one return statement."], "explain": "Use === so values of different types are never treated as equal."}, {"id": "js-slice", "lang": "js", "lvl": 1, "desc": "Return the three highest scores.", "code": "function topThree(scores) {\n  // Highest scores first.\n  const sorted = [...scores].sort((a, b) => b - a);\n  const top = sorted.slice(1, 4);\n  return top;\n}", "bug": 4, "fix": "  const top = sorted.slice(0, 3);", "why": ["Indexes start at 0, so slice(1, 4) skips the highest score.", "The comparator b - a sorts from lowest to highest.", "The spread [...scores] sorts the original array in place.", "slice(1, 4) returns four items instead of three."], "explain": "slice(0, 3) returns the items at indexes 0, 1 and 2."}, {"id": "js-const-reassign", "lang": "js", "lvl": 1, "desc": "Count the vowels in a piece of text.", "code": "function countVowels(text) {\n  const count = 0;\n  for (const ch of text.toLowerCase()) {\n    if (\"aeiou\".includes(ch)) {\n      count++;\n    }\n  }\n  return count;\n}", "bug": 2, "fix": "  let count = 0;", "why": ["count is declared with const, so count++ throws a TypeError.", "for...of cannot loop over the characters of a string.", "includes() only works on arrays, not strings.", "toLowerCase() changes the original text, which is not allowed."], "explain": "Use let for a variable that will be reassigned."}, {"id": "js-array-equal", "lang": "js", "lvl": 2, "desc": "Check whether two sorted arrays of strings contain the same items.", "code": "function sameItems(a, b) {\n  // Both arrays are already sorted.\n  if (a.length !== b.length) {\n    return false;\n  }\n  return a === b;\n}", "bug": 6, "fix": "  return a.every((x, i) => x === b[i]);", "why": ["=== on arrays checks whether they are the same object, not whether they hold the same items, so it is false for two separate arrays.", "The length check should use != instead of !==.", "Arrays do not have a length property.", "The function should return the arrays instead of a boolean."], "explain": "Compare the arrays item by item, for example with every()."}, {"id": "js-reduce-start", "lang": "js", "lvl": 2, "desc": "Add up the price of every item in the cart.", "code": "const cart = [{ name: \"Tea\", price: 4 }, { name: \"Jam\", price: 6 }];\n\nfunction cartTotal(items) {\n  // items look like { name: \"Tea\", price: 4 }\n  const total = items.reduce((sum, item) => sum + item.price);\n  return total;\n}", "bug": 5, "fix": "  const total = items.reduce((sum, item) => sum + item.price, 0);", "why": ["Without a starting value, reduce() uses the first item object as sum, so the result is \"[object Object]6\".", "reduce() runs the callback from the last item to the first.", "Arrow functions cannot have two parameters.", "item.price must be written as item[\"price\"]."], "explain": "Give reduce() a starting value of 0 when the items are objects."}, {"id": "js-arrow-this", "lang": "js", "lvl": 2, "desc": "Increase the counter by one and return the new count.", "code": "const counter = {\n  count: 0,\n  increment: () => {\n    this.count++;\n    return this.count;\n  },\n};", "bug": 3, "fix": "  increment() {", "why": ["Arrow functions do not get their own this, so this does not refer to counter and count is never updated.", "Objects declared with const cannot have their properties changed.", "The ++ operator only works on variables, not properties.", "The trailing comma after the method is a syntax error."], "explain": "Use a regular method so that this refers to the object it was called on."}, {"id": "js-indexof", "lang": "js", "lvl": 1, "desc": "Return true if the list of roles includes \"admin\".", "code": "function hasAdmin(roles) {\n  if (roles.indexOf(\"admin\")) {\n    return true;\n  }\n  return false;\n}", "bug": 2, "fix": "  if (roles.includes(\"admin\")) {", "why": ["indexOf returns 0 when \"admin\" is first, which is falsy, and \u22121 when it is missing, which is truthy.", "indexOf only works on strings, not arrays.", "The function should return the string \"true\" instead of a boolean.", "The if statement needs an else branch."], "explain": "Use includes(), or compare indexOf(...) !== -1."}, {"id": "js-get-month", "lang": "js", "lvl": 2, "desc": "Format a date as year, month and day, like 2024-3-15 for March 15.", "code": "function formatDate(d) {\n  const year = d.getFullYear();\n  const month = d.getMonth();\n  const day = d.getDate();\n  return `${year}-${month}-${day}`;\n}", "bug": 3, "fix": "  const month = d.getMonth() + 1;", "why": ["getMonth() counts months from 0, so March comes out as 2.", "getDate() returns the day of the week, not the day of the month.", "getFullYear() returns only the last two digits of the year.", "Template literals cannot contain more than two placeholders."], "explain": "Add 1 to getMonth() to get the usual month number."}, {"id": "js-or-default", "lang": "js", "lvl": 2, "desc": "Use 50 as the default volume, but allow 0 to mute the sound.", "code": "function setVolume(settings, level) {\n  // level is undefined or a number from 0 to 100\n  const volume = level || 50;\n  settings.volume = volume;\n  return settings.volume;\n}", "bug": 3, "fix": "  const volume = level ?? 50;", "why": ["|| replaces every falsy value, including 0, so muting sets the volume to 50.", "settings is a parameter, so its properties cannot be changed.", "const cannot hold a number that comes from a parameter.", "The comment makes the line below it run twice."], "explain": "The ?? operator only falls back when the value is null or undefined."}, {"id": "js-async-foreach", "lang": "js", "lvl": 2, "desc": "Save every item, then return how many items were saved.", "code": "async function save(item, db) {\n  await new Promise(r => setTimeout(r, 5));\n  db.push(item);\n}\n\nasync function saveAll(items, db) {\n  items.forEach(async item => await save(item, db));\n  return db.length;\n}", "bug": 7, "fix": "  await Promise.all(items.map(item => save(item, db)));", "why": ["forEach does not wait for async callbacks, so saveAll returns before any item is saved.", "setTimeout cannot be used inside a promise.", "db.push() replaces the array instead of adding to it.", "An async function cannot call another async function."], "explain": "Wait for every save, for example with await Promise.all(items.map(...)) or a for...of loop with await."}, {"id": "js-parseint-map", "lang": "js", "lvl": 2, "desc": "Convert text fields like \"31\" to numbers and drop any that are not numbers.", "code": "function parseAges(fields) {\n  // fields look like [\"31\", \"27\", \"45\"]\n  const ages = fields.map(parseInt);\n  const valid = ages.filter(n => !Number.isNaN(n));\n  return valid;\n}", "bug": 3, "fix": "  const ages = fields.map(s => parseInt(s, 10));", "why": ["map() passes the index as a second argument, which parseInt treats as the radix, so \"27\" is read in base 1 and \"45\" in base 2, giving NaN.", "parseInt cannot be passed to map() without parentheses.", "Number.isNaN returns true for every number.", "filter() removes the items for which the callback returns true."], "explain": "Call parseInt yourself and always pass the radix, as in parseInt(s, 10)."}, {"id": "py-mutable-default", "lang": "py", "lvl": 2, "desc": "Add an item to a basket, starting a new, empty basket when none is given.", "code": "def add_item(item, basket=[]):\n    if basket is None:\n        basket = []\n    basket.append(item)\n    return basket\n\nfirst = add_item(\"apple\")\nsecond = add_item(\"pear\")", "bug": 1, "fix": "def add_item(item, basket=None):", "why": ["The default list is created once and shared by every call, so the second call returns [\"apple\", \"pear\"].", "append() returns the new list, so basket should be reassigned.", "A parameter cannot have a default value when it comes after another parameter.", "basket is None can never be true for a list, so the check raises an error."], "explain": "Use None as the default and create the new list inside the function."}, {"id": "py-int-div", "lang": "py", "lvl": 1, "desc": "Return the average score, or 0 when there are no scores.", "code": "def average(scores):\n    if not scores:\n        return 0\n    total = sum(scores)\n    count = len(scores)\n    return total // count", "bug": 6, "fix": "    return total / count", "why": ["// is floor division, so the average of 1 and 2 comes out as 1 instead of 1.5.", "sum() only works on lists of floats.", "not scores is True for any list that contains a 0.", "len() counts the characters in each score."], "explain": "Use / for true division in Python 3."}, {"id": "py-is-equal", "lang": "py", "lvl": 2, "desc": "Return True when the user\u2019s role is admin, ignoring spaces and capitals.", "code": "def is_admin(user):\n    \"\"\"Roles may have stray spaces or capital letters.\"\"\"\n    role = user[\"role\"].strip().lower()\n    if role is \"admin\":\n        return True\n    return False", "bug": 4, "fix": "    if role == \"admin\":", "why": ["is checks whether two names point to the same object, and the cleaned-up string is a new object, so the test is False.", "strip() and lower() cannot be chained.", "Dictionary keys must be read with user.role instead of user[\"role\"].", "A function cannot contain two return statements."], "explain": "Use == to compare values; keep is for None and other singletons."}, {"id": "py-remove-loop", "lang": "py", "lvl": 2, "desc": "Remove every word shorter than three letters from the list.", "code": "def drop_short(words):\n    for w in words:\n        if len(w) < 3:\n            words.remove(w)\n    return words\n\nprint(drop_short([\"a\", \"to\", \"cat\", \"dog\"]))", "bug": 2, "fix": "    for w in words[:]:", "why": ["Removing items from a list while looping over it shifts the remaining items, so the loop skips the word after each removal.", "len() returns the number of words, not the length of one word.", "remove() deletes every copy of the word, not just one.", "print() cannot be used on a list."], "explain": "Loop over a copy such as words[:], or build a new list with a comprehension."}, {"id": "py-range-end", "lang": "py", "lvl": 1, "desc": "Add up every whole number from 1 to n.", "code": "def sum_to(n):\n    \"\"\"For n = 4, return 1 + 2 + 3 + 4.\"\"\"\n    total = 0\n    for i in range(1, n):\n        total += i\n    return total", "bug": 4, "fix": "    for i in range(1, n + 1):", "why": ["range() stops before its end value, so n itself is never added.", "range() starts at 0 no matter what start value is given.", "total += i doubles total instead of adding i.", "The return statement should be inside the loop."], "explain": "range(1, n + 1) includes n."}, {"id": "py-slice-end", "lang": "py", "lvl": 1, "desc": "Return the three most recent entries.", "code": "def last_three(items):\n    \"\"\"items are in time order, oldest first.\"\"\"\n    if len(items) < 3:\n        return items\n    recent = items[-3:-1]\n    return recent", "bug": 5, "fix": "    recent = items[-3:]", "why": ["The end index -1 is excluded, so the slice drops the newest entry and returns only two items.", "Negative indexes count from the start of the list.", "Slicing changes the original list.", "The length check should use <= instead of <."], "explain": "Leave the end empty, as in items[-3:], to slice through to the end."}, {"id": "py-no-return", "lang": "py", "lvl": 1, "desc": "Apply a percentage discount and return the price rounded to cents.", "code": "def apply_discount(price, percent):\n    if percent <= 0:\n        return price\n    discount = price * percent / 100\n    final = price - discount\n    round(final, 2)", "bug": 6, "fix": "    return round(final, 2)", "why": ["The rounded price is calculated but never returned, so the function returns None.", "round() changes final in place and should be assigned to nothing.", "percent / 100 is always 0 because of integer division.", "The early return should come after the discount is calculated."], "explain": "Return the value; a Python function without return gives None."}, {"id": "py-float-equal", "lang": "py", "lvl": 1, "desc": "Check whether the debits and credits cancel each other out.", "code": "def is_balanced(debits, credits):\n    total = 0.0\n    for d in debits:\n        total += d\n    for c in credits:\n        total -= c\n    return total == 0.0", "bug": 7, "fix": "    return abs(total) < 1e-9", "why": ["Floating-point arithmetic is not exact, so 0.1 + 0.2 - 0.3 is a tiny number, not 0.0.", "total should start as the integer 0, not 0.0.", "The second loop runs before the first one.", "-= subtracts the whole list instead of one value."], "explain": "Compare floats with a tolerance (or use math.isclose or the decimal module)."}, {"id": "py-str-plus-int", "lang": "py", "lvl": 1, "desc": "Tell the user how old they will be next year.", "code": "def birthday_message(answer):\n    # answer is the text the user typed, like \"29\"\n    age = answer.strip()\n    if not age.isdigit():\n        return \"Please enter a whole number.\"\n    next_age = age + 1\n    return f\"Next year you will be {next_age}.\"", "bug": 6, "fix": "    next_age = int(age) + 1", "why": ["age is still a string, and Python cannot add the number 1 to a string, so this raises a TypeError.", "isdigit() returns True for text that contains letters.", "f-strings cannot contain variables.", "strip() removes every digit from the text."], "explain": "Convert the text with int() before doing arithmetic."}, {"id": "py-late-binding", "lang": "py", "lvl": 2, "desc": "Build functions that multiply by 1, 2 and 3.", "code": "def make_multipliers():\n    \"\"\"Return [times 1, times 2, times 3].\"\"\"\n    funcs = []\n    for n in range(1, 4):\n        funcs.append(lambda x: x * n)\n    return funcs", "bug": 5, "fix": "        funcs.append(lambda x, n=n: x * n)", "why": ["Each lambda looks up n when it is called, after the loop has finished, so every function multiplies by 3.", "A lambda cannot be stored in a list.", "range(1, 4) produces 1, 2, 3 and 4.", "Lambdas can only take zero arguments."], "explain": "Bind the current value with a default argument (n=n) or use functools.partial."}, {"id": "py-sql-injection", "lang": "py", "lvl": 2, "desc": "Find users by exact name in a SQLite database.", "code": "import sqlite3\n\ndef find_user(conn, name):\n    rows = conn.execute(\n        \"SELECT id, name FROM users WHERE name = '\" + name + \"'\"\n    ).fetchall()\n    return rows", "bug": 5, "fix": "        \"SELECT id, name FROM users WHERE name = ?\", (name,)", "why": ["The name is pasted into the SQL text, so input like x' OR '1'='1 changes the query and returns every user (SQL injection).", "fetchall() returns only the first row.", "SQLite does not support the = operator on text columns.", "conn.execute() must be called on a cursor, never on a connection."], "explain": "Pass values as query parameters with ? placeholders so they are never treated as SQL."}, {"id": "py-keyerror", "lang": "py", "lvl": 1, "desc": "Count how many times each word appears.", "code": "def word_counts(text):\n    \"\"\"Return a dict like {\"a\": 2, \"b\": 1}.\"\"\"\n    counts = {}\n    for word in text.lower().split():\n        counts[word] += 1\n    return counts", "bug": 5, "fix": "        counts[word] = counts.get(word, 0) + 1", "why": ["The first time a word is seen it is not in the dict yet, so counts[word] += 1 raises a KeyError.", "split() splits the text into single characters.", "lower() returns None, so split() fails.", "Dictionaries cannot use strings as keys."], "explain": "Start missing words at 0 with counts.get(word, 0), or use collections.Counter."}, {"id": "py-first-match", "lang": "py", "lvl": 2, "desc": "Return the first negative number in the list, or None if there is none.", "code": "def first_negative(nums):\n    found = None\n    for n in nums:\n        if n < 0:\n            found = n\n    return found", "bug": 5, "fix": "            return n", "why": ["The loop keeps going after a match, so each later negative number overwrites found and the last one is returned.", "found should start as 0 instead of None.", "n < 0 is also true for 0.", "A for loop cannot return a value."], "explain": "Stop at the first match, for example by returning it right away or adding break."}, {"id": "py-append-list", "lang": "py", "lvl": 1, "desc": "Combine two lists of numbers into one sorted list.", "code": "def merge_sorted(a, b):\n    \"\"\"merge_sorted([3, 1], [2]) returns [1, 2, 3].\"\"\"\n    result = list(a)\n    result.append(b)\n    result.sort()\n    return result", "bug": 4, "fix": "    result.extend(b)", "why": ["append() adds the whole list b as a single item, so sort() then has to compare a list with numbers and raises a TypeError.", "list(a) does not copy a, so a is changed.", "sort() returns the sorted list, and the result is lost.", "sort() sorts from highest to lowest by default."], "explain": "Use extend() (or +=) to add each item of another list."}, {"id": "py-sort-none", "lang": "py", "lvl": 1, "desc": "Return the scores from highest to lowest.", "code": "def top_scores(scores):\n    \"\"\"Return a new list, highest score first.\"\"\"\n    if not scores:\n        return []\n    ordered = scores.sort(reverse=True)\n    return ordered", "bug": 5, "fix": "    ordered = sorted(scores, reverse=True)", "why": ["list.sort() sorts in place and returns None, so the function returns None.", "reverse=True sorts from lowest to highest.", "not scores is True for a list of numbers.", "sort() only works on lists of strings."], "explain": "Use sorted(), which returns a new sorted list."}, {"id": "py-str-immutable", "lang": "py", "lvl": 1, "desc": "Return the message in capital letters with an exclamation mark.", "code": "def shout(message):\n    message = message.strip()\n    if not message:\n        return \"\"\n    message.upper()\n    return message + \"!\"", "bug": 5, "fix": "    message = message.upper()", "why": ["Strings cannot be changed in place, so upper() returns a new string that is thrown away.", "strip() turns the message into a list of words.", "An empty string is truthy, so the check never runs.", "Strings cannot be joined with +."], "explain": "Assign the result of upper() back to the variable."}, {"id": "py-zero-falsy", "lang": "py", "lvl": 2, "desc": "Describe a score, which is None if the player has not played yet and may be 0.", "code": "def describe_score(score):\n    \"\"\"score is None before the first game, and 0 is a real score.\"\"\"\n    label = \"Score\"\n    if not score:\n        return \"No score yet\"\n    return f\"{label}: {score}\"", "bug": 4, "fix": "    if score is None:", "why": ["not score is also True for 0, so a real score of 0 is reported as missing.", "f-strings cannot use a variable as a label.", "None is not a valid value for a parameter.", "The function needs an else branch after return."], "explain": "Test for None explicitly when 0 is a valid value."}, {"id": "py-generator-twice", "lang": "py", "lvl": 2, "desc": "Return the average of the squares of the numbers.", "code": "def mean_square(numbers):\n    \"\"\"mean_square([1, 2, 3]) is 14 / 3.\"\"\"\n    squares = (n * n for n in numbers)\n    total = sum(squares)\n    count = len(list(squares))\n    return total / count", "bug": 3, "fix": "    squares = [n * n for n in numbers]", "why": ["A generator can only be read once, so after sum() it is empty, count is 0, and the division fails.", "n * n should be written as n ** n.", "sum() cannot add up a generator.", "len() cannot be called on a list."], "explain": "Use a list (square brackets) when you need to go through the values more than once."}, {"id": "py-while-end", "lang": "py", "lvl": 1, "desc": "Return the index of target in the list, or -1 if it is missing.", "code": "def find_index(items, target):\n    i = 0\n    while i <= len(items):\n        if items[i] == target:\n            return i\n        i += 1\n    return -1", "bug": 3, "fix": "    while i < len(items):", "why": ["With <=, the loop reaches i == len(items) when the target is missing, and items[i] raises an IndexError.", "i += 1 should come before the if statement.", "The function should return None instead of -1.", "== cannot compare items of a list."], "explain": "Valid indexes stop at len(items) - 1, so the loop must use <."}, {"id": "sql-eq-null", "lang": "sql", "lvl": 1, "desc": "List the customers who have not given a phone number.", "code": "-- Customers with no phone number\nSELECT id,\n       name\nFROM customers\nWHERE phone = NULL\nORDER BY name;", "bug": 5, "fix": "WHERE phone IS NULL", "why": ["Comparing anything with = NULL gives unknown, never true, so no rows are returned.", "ORDER BY must come before WHERE.", "NULL must be written in quotes, as 'NULL'.", "The column list needs parentheses around it."], "explain": "Use IS NULL (or IS NOT NULL) to test for missing values."}, {"id": "sql-update-all", "lang": "sql", "lvl": 1, "desc": "Mark order 42 as shipped and record the shipping date.", "code": "-- Ship order 42\nBEGIN;\nUPDATE orders\nSET status = 'shipped',\n    shipped_at = '2024-05-01';\nCOMMIT;", "bug": 5, "fix": "    shipped_at = '2024-05-01' WHERE id = 42;", "why": ["The UPDATE ends without a WHERE clause, so every order is marked as shipped.", "SET can only change one column at a time.", "Dates cannot be stored as text.", "COMMIT undoes the changes made after BEGIN."], "explain": "Always limit an UPDATE with WHERE, here WHERE id = 42."}, {"id": "sql-like", "lang": "sql", "lvl": 1, "desc": "Find the products whose name contains the word \u201clamp\u201d.", "code": "-- Products with \"lamp\" anywhere in the name\nSELECT id, name, price\nFROM products\nWHERE name LIKE 'lamp'\n  AND price > 0\nORDER BY price;", "bug": 4, "fix": "WHERE name LIKE '%lamp%'", "why": ["Without % wildcards, LIKE 'lamp' only matches a name that is exactly \u201clamp\u201d.", "LIKE only works on numeric columns.", "AND must come before WHERE.", "ORDER BY price sorts the names alphabetically."], "explain": "Use % to match any text before or after the word."}, {"id": "sql-having", "lang": "sql", "lvl": 2, "desc": "List the customers who have placed more than two orders.", "code": "-- Customers with more than 2 orders\nSELECT customer_id,\n       COUNT(*) AS order_count\nFROM orders\nGROUP BY customer_id\nWHERE COUNT(*) > 2\nORDER BY order_count DESC;", "bug": 6, "fix": "HAVING COUNT(*) > 2", "why": ["WHERE cannot filter on an aggregate like COUNT(*) and cannot come after GROUP BY; filtering groups needs HAVING.", "COUNT(*) counts only the rows where every column is filled in.", "GROUP BY must list every column in the table.", "An alias such as order_count cannot be used in ORDER BY."], "explain": "WHERE filters rows before grouping, and HAVING filters groups after it."}, {"id": "sql-group-wrong", "lang": "sql", "lvl": 2, "desc": "Show the total amount spent by each customer.", "code": "-- One row per customer with their total\nSELECT customer_id,\n       SUM(amount) AS total\nFROM orders\nGROUP BY id\nORDER BY total DESC;", "bug": 5, "fix": "GROUP BY customer_id", "why": ["Grouping by the order id puts every order in its own group, so customers with several orders appear more than once.", "SUM() cannot be given an alias.", "ORDER BY ... DESC sorts from smallest to largest.", "customer_id cannot be selected together with SUM()."], "explain": "Group by the column you want one row for, here customer_id."}, {"id": "sql-count-col", "lang": "sql", "lvl": 2, "desc": "Count all paid orders, including the ones without a coupon.", "code": "-- Number of paid orders\nSELECT\n  COUNT(coupon) AS paid_orders\nFROM orders\nWHERE status = 'paid'\n  AND amount > 0;", "bug": 3, "fix": "  COUNT(*) AS paid_orders", "why": ["COUNT(column) skips rows where that column is NULL, so orders without a coupon are not counted.", "COUNT() counts distinct values only.", "WHERE must come before FROM.", "Text values like 'paid' need double quotes."], "explain": "COUNT(*) counts every row, whatever the columns contain."}, {"id": "sql-int-div", "lang": "sql", "lvl": 2, "desc": "Show what percentage of the tasks are done (in SQLite, where done is 0 or 1).", "code": "-- Percentage of finished tasks\nSELECT\n  SUM(done) / COUNT(*) * 100\n    AS percent_done\nFROM tasks\nWHERE project_id = 7;", "bug": 3, "fix": "  SUM(done) * 100.0 / COUNT(*)", "why": ["Both values are integers, so SQLite uses integer division and 3 / 4 becomes 0 before it is multiplied by 100.", "SUM() cannot be used together with COUNT().", "An alias cannot start on its own line.", "COUNT(*) counts only the tasks that are done."], "explain": "Multiply by 100.0 first so the division is done with decimals."}, {"id": "sql-not-in-null", "lang": "sql", "lvl": 2, "desc": "List the employees who are not anyone\u2019s manager.", "code": "-- Employees who manage nobody\nSELECT id, name\nFROM employees\nWHERE id NOT IN (\n  SELECT manager_id FROM employees\n)\nORDER BY name;", "bug": 5, "fix": "  SELECT manager_id FROM employees WHERE manager_id IS NOT NULL", "why": ["The top boss has a NULL manager_id, and NOT IN with a NULL in the list is never true, so no rows come back.", "A table cannot be used in its own subquery.", "NOT IN only works with lists of text.", "The subquery must select the name column too."], "explain": "Filter out NULLs in the subquery, or use NOT EXISTS instead."}, {"id": "sql-left-join-where", "lang": "sql", "lvl": 2, "desc": "Show every customer with their number of paid orders, using 0 for customers without any.", "code": "-- Paid orders per customer, including customers with none\nSELECT c.name, COUNT(o.id) AS paid_orders\nFROM customers c\nLEFT JOIN orders o ON o.customer_id = c.id\nWHERE o.status = 'paid'\nGROUP BY c.id, c.name\nORDER BY c.name;", "bug": 5, "fix": "      AND o.status = 'paid'", "why": ["Filtering on o.status in WHERE removes the customers without orders, whose o columns are NULL, so the LEFT JOIN acts like an inner join.", "LEFT JOIN returns only the rows that match in both tables.", "COUNT(o.id) counts NULL ids as 1.", "GROUP BY cannot list two columns."], "explain": "Put conditions on the right-hand table into the ON clause of a LEFT JOIN."}, {"id": "sql-between-dates", "lang": "sql", "lvl": 2, "desc": "List the orders created in January 2024 (created_at holds text like \u201c2024-01-31 14:05\u201d).", "code": "-- Orders from January 2024\nSELECT id, created_at\nFROM sales\nWHERE created_at >= '2024-01-01'\n  AND created_at <= '2024-01-31'\nORDER BY created_at;", "bug": 5, "fix": "  AND created_at < '2024-02-01'", "why": ["Text like \u201c2024-01-31 14:05\u201d sorts after \u201c2024-01-31\u201d, so every order placed during January 31 is left out.", "The >= operator cannot be used on text columns.", "Dates must be compared with LIKE instead of >= and <=.", "ORDER BY cannot sort by a text column."], "explain": "Use a half-open range that ends before the first moment of February: created_at < '2024-02-01'."}, {"id": "sql-join-key", "lang": "sql", "lvl": 1, "desc": "List each order with the name of the customer who placed it.", "code": "-- Orders with customer names\nSELECT o.id, c.name, o.amount\nFROM orders o\nJOIN customers c ON c.id = o.id\nWHERE o.amount > 0\nORDER BY o.id;", "bug": 4, "fix": "JOIN customers c ON c.id = o.customer_id", "why": ["The join matches the customer id against the order id, so orders are paired with the wrong customers or dropped.", "Table aliases like o and c are not allowed in a join.", "WHERE must come before JOIN.", "JOIN returns every combination of rows from both tables."], "explain": "Join on the foreign key: c.id = o.customer_id."}, {"id": "sql-and-or", "lang": "sql", "lvl": 2, "desc": "List the open tickets that have high or urgent priority.", "code": "-- Open tickets that are high or urgent\nSELECT id, title\nFROM tickets\nWHERE status = 'open'\n  AND priority = 'high' OR priority = 'urgent'\nORDER BY id;", "bug": 5, "fix": "  AND (priority = 'high' OR priority = 'urgent')", "why": ["AND binds more tightly than OR, so every urgent ticket is returned, even the closed ones.", "OR cannot be used in a WHERE clause.", "Text values must be compared with LIKE.", "ORDER BY id sorts the titles alphabetically."], "explain": "Add parentheses around the OR conditions (or use priority IN ('high', 'urgent'))."}, {"id": "sql-null-plus", "lang": "sql", "lvl": 2, "desc": "Show each active employee\u2019s total pay: salary plus bonus, where bonus may be empty.", "code": "-- Total pay per active employee\nSELECT name,\n       salary + bonus AS total_pay\nFROM staff\nWHERE active = 1\nORDER BY total_pay DESC;", "bug": 3, "fix": "       salary + COALESCE(bonus, 0) AS total_pay", "why": ["Adding NULL to a number gives NULL, so employees without a bonus get no total pay at all.", "Columns cannot be added together in a SELECT.", "An alias cannot be used in ORDER BY.", "WHERE active = 1 returns only the inactive employees."], "explain": "COALESCE(bonus, 0) turns a missing bonus into 0."}]/*END*/;
+
+  const LANG = { js: 'JavaScript', py: 'Python', sql: 'SQL' };
+  const KW = {
+    js: new Set('async await break case catch class const continue default delete do else export false for function if import in instanceof let new null of return switch this throw true try typeof undefined var void while yield'.split(' ')),
+    py: new Set('and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield'.split(' ')),
+    sql: new Set('ADD ALL AND AS ASC BEGIN BETWEEN BY COMMIT COUNT COALESCE DELETE DESC DISTINCT EXISTS FROM GROUP HAVING IN INNER INSERT INTO IS JOIN LEFT LIKE LIMIT NOT NULL ON OR ORDER SELECT SET SUM UPDATE VALUES WHERE'.split(' ')),
+  };
+  const TOK = {
+    js: /(\/\/.*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|(\b\d+(?:\.\d+)?(?:e-?\d+)?\b)|([A-Za-z_$][\w$]*)|(\s+|.)/gy,
+    py: /(#.*)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(\b\d+(?:\.\d+)?(?:e-?\d+)?\b)|([A-Za-z_]\w*)|(\s+|.)/gy,
+    sql: /(--.*)|('(?:''|[^'])*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_]\w*)|(\s+|.)/gy,
+  };
+  const esc = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  function highlight(line, lang) {
+    const re = TOK[lang]; re.lastIndex = 0;
+    let out = '', m;
+    while (re.lastIndex < line.length && (m = re.exec(line))) {
+      const [all, com, str, num, word] = m;
+      const word2 = lang === 'sql' && word ? word.toUpperCase() : word;
+      const cls = com ? 'c' : str ? 's' : num ? 'n' : word && KW[lang].has(word2) ? 'k' : '';
+      out += cls ? `<span class="tk-${cls}">${esc(all)}</span>` : esc(all);
+    }
+    return out || ' ';
+  }
+
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, streak: 0, n: 0, found: 0, queue: [], cur: null, line: 0, opts: [], t0: 0, timer: 0, lastSec: -1 };
+  $('best').textContent = best.toLocaleString('en-US');
+
+  const fmt = n => n.toLocaleString('en-US');
+  const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`;
+  const mult = () => 1 + 0.25 * Math.min(Math.max(s.streak - 1, 0), 8);
+  const sentence = t => /[.!?]$/.test(t) ? t : t + '.';
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function hud() {
+    $('score').textContent = fmt(s.score);
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', plural(s.lives, 'life', 'lives'));
+    $('streak').textContent = s.streak > 1 ? `${s.streak} in a row (×${mult().toFixed(2).replace(/\.?0+$/, '')} points)` : '';
+  }
+
+  // Beginner snippets first, mixing in intermediate ones as the game goes on.
+  function buildQueue() {
+    return Arcade.shuffle(BANK).map(x => ({ x, k: x.lvl + Math.random() * 1.2 })).sort((a, b) => a.k - b.k).map(o => o.x);
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, streak: 0, n: 0, found: 0, queue: buildQueue() });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function lineEls() { return [...$('lines').querySelectorAll('.ln:not(.fixrow)')]; }
+
+  function next() {
+    if (!s.queue.length) s.queue = buildQueue();
+    s.cur = s.queue.shift();
+    s.n++;
+    const c = s.cur;
+    $('num').textContent = `Snippet ${s.n}: ${LANG[c.lang]}, ${c.lvl === 1 ? 'beginner' : 'intermediate'}`;
+    $('q').textContent = `This code should ${c.desc.charAt(0).toLowerCase()}${c.desc.slice(1)}`;
+    const box = $('lines');
+    box.innerHTML = c.code.split('\n').map((l, i) =>
+      `<div class="ln" role="option" id="ln-${i + 1}" data-i="${i}" aria-selected="false"><span class="no">${i + 1}</span><span class="tx">${highlight(l, c.lang)}</span></div>`).join('');
+    $('code').classList.remove('done');
+    $('choices').innerHTML = '';
+    $('fb').textContent = ''; $('fb').className = '';
+    $('why').textContent = '';
+    $('next').hidden = true;
+    $('ask').textContent = 'Step 1: Which line contains the bug? Move with the arrow keys and press Enter to choose it.';
+    s.state = 'line';
+    setCursor(0);
+    $('code').focus();
+    s.t0 = performance.now(); s.lastSec = -1;
+    tick();
+  }
+
+  function setCursor(i) {
+    const els = lineEls();
+    s.line = Math.max(0, Math.min(els.length - 1, i));
+    els.forEach((el, j) => { el.classList.toggle('cur', j === s.line); el.setAttribute('aria-selected', j === s.line ? 'true' : 'false'); });
+    const el = els[s.line];
+    $('code').setAttribute('aria-activedescendant', el.id);
+    $('code').setAttribute('aria-label', `Code listing, line ${s.line + 1} of ${els.length}`);
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  function tick() {
+    cancelAnimationFrame(s.timer);
+    if (s.state !== 'line' && s.state !== 'why') return;
+    const left = Math.max(0, TIME - (performance.now() - s.t0));
+    $('bar').style.transform = `scaleX(${left / TIME})`;
+    $('bar').classList.toggle('low', left < 10000);
+    const sec = Math.ceil(left / 1000);
+    if (sec !== s.lastSec) { s.lastSec = sec; $('secs').textContent = `${plural(sec, 'second', 'seconds')} left`; }
+    if (left <= 0) return reveal('timeout');
+    s.timer = requestAnimationFrame(tick);
+  }
+
+  function pickLine() {
+    if (s.state !== 'line') return;
+    if (s.line + 1 !== s.cur.bug) return reveal('line');
+    s.state = 'why';
+    lineEls()[s.line].classList.add('bad');
+    $('fb').textContent = `Yes, the bug is on line ${s.cur.bug}. Now choose what is wrong with it.`; $('fb').className = 'right';
+    $('ask').textContent = 'Step 2: What is wrong with this line? Press the number of the best explanation.';
+    s.opts = Arcade.shuffle(s.cur.why.map((t, i) => ({ t, ok: i === 0 })));
+    const box = $('choices');
+    s.opts.forEach((o, i) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'choice';
+      b.innerHTML = `<kbd>${i + 1}</kbd><span></span>`;
+      b.querySelector('span').textContent = o.t;
+      b.addEventListener('click', () => answer(i));
+      box.append(b);
+    });
+    box.firstChild.focus();
+  }
+
+  function answer(i) {
+    if (s.state !== 'why' || !s.opts[i]) return;
+    const btns = [...$('choices').children];
+    btns.forEach((b, j) => { if (s.opts[j].ok) b.classList.add('right'); });
+    if (!s.opts[i].ok) btns[i].classList.add('wrong');
+    reveal(s.opts[i].ok ? 'full' : 'part');
+  }
+
+  // outcome: full (line and reason right), part (line right only), line (wrong line), timeout
+  function reveal(outcome) {
+    cancelAnimationFrame(s.timer);
+    const c = s.cur, fb = $('fb');
+    s.state = 'reveal';
+    $('code').classList.add('done');
+    const els = lineEls();
+    els.forEach(el => el.classList.remove('cur'));
+    els[c.bug - 1].classList.add('bad');
+    if (outcome === 'line') els[s.line].classList.add('miss');
+    const fix = document.createElement('div');
+    fix.className = 'ln fixrow';
+    fix.innerHTML = `<span class="no">fix</span><span class="tx">${highlight(c.fix, c.lang)}</span>`;
+    els[c.bug - 1].after(fix);
+    fix.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+    if (outcome === 'full') {
+      s.streak++; s.found++;
+      const left = Math.max(0, TIME - (performance.now() - s.t0));
+      const pts = Math.round((100 + Math.round(left / TIME * 50)) * mult());
+      s.score += pts;
+      fb.textContent = `Correct! +${plural(pts, 'point', 'points')}.`; fb.className = 'right';
+    } else if (outcome === 'part') {
+      s.streak = 0; s.found++;
+      s.score += PARTIAL;
+      fb.textContent = `You found the right line, but that is not the reason it is wrong. +${PARTIAL} points.`; fb.className = 'part';
+    } else {
+      s.streak = 0; s.lives--;
+      fb.textContent = `${outcome === 'timeout' ? 'Time’s up' : 'Not quite'}. The bug is on line ${c.bug}.`; fb.className = 'wrong';
+    }
+    $('why').textContent = `${sentence(c.why[0])} ${sentence(c.explain)}`;
+    $('ask').textContent = 'The corrected line is shown in green below the bug.';
+    hud();
+    $('next').textContent = s.lives > 0 ? 'Next snippet' : 'See your score';
+    $('next').hidden = false;
+    $('next').focus();
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives > 0) return next();
+    s.state = 'over';
+    $('secs').textContent = '';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = fmt(best);
+    showOverlay('Game over', `You scored ${plural(s.score, 'point', 'points')} and found ${plural(s.found, 'bug', 'bugs')} in ${plural(s.n, 'snippet', 'snippets')}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${fmt(best)}.` : '')}`, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (s.state === 'line') {
+      const n = lineEls().length;
+      const moves = { ArrowUp: s.line - 1, ArrowDown: s.line + 1, Home: 0, End: n - 1, PageUp: s.line - 5, PageDown: s.line + 5 };
+      if (e.key in moves) { e.preventDefault(); setCursor(moves[e.key]); $('code').focus(); }
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickLine(); }
+    } else if (s.state === 'why') {
+      const i = '1234'.indexOf(e.key);
+      if (i >= 0 && e.key.length === 1) { e.preventDefault(); answer(i); return; }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        e.preventDefault();
+        const btns = [...$('choices').children];
+        const j = btns.indexOf(document.activeElement);
+        btns[(j + (e.key === 'ArrowDown' ? 1 : btns.length - 1)) % btns.length].focus();
+      }
+    } else if (s.state === 'reveal' && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault(); advance();
+    } else if ((s.state === 'ready' || s.state === 'over') && e.key === 'Enter') {
+      e.preventDefault(); start();
+    }
+  });
+  $('lines').addEventListener('click', e => {
+    const el = e.target.closest('.ln');
+    if (!el || s.state !== 'line' || el.classList.contains('fixrow')) return;
+    setCursor(Number(el.dataset.i));
+    pickLine();
+  });
+  $('next').addEventListener('click', advance);
+  $('go').addEventListener('click', () => { if (s.state === 'ready' || s.state === 'over') start(); });
+  $('go').focus();
+})();
+</script>

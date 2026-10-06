@@ -1,0 +1,250 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Port Match</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: HUD, then a panel with a meta row, timer bar, the question, a 2x2 grid of choices and the explanation. */
+  :root { --accent: #c792ea; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 360px; }
+  .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #combo { color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--ground); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  .bar i.low { background: var(--danger); }
+  #q { margin: 0; font-size: 1.1rem; line-height: 1.45; font-weight: 600; min-height: 3em; }
+  #q:focus { outline: none; }
+  .choice:focus-visible, #go:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.9rem; color: var(--muted); line-height: 1.5; }
+  #fb.right { color: var(--good); }
+  #fb.wrong { color: var(--danger); }
+  #desc { margin: 0; min-height: 3em; font-size: 0.82rem; color: var(--ink); line-height: 1.55; }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="cab">
+  <h1>Port Match</h1>
+  <p class="rule">Match well-known network protocols with their default port numbers. Correct answers in a row build a combo that multiplies your points, and three wrong answers end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Question 1</span><span id="combo"></span></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <p id="q" tabindex="-1">Your first question will appear here.</p>
+    <div class="choices" id="choices"></div>
+    <p id="fb" aria-live="polite"></p>
+    <p id="desc"></p>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">You have 10 seconds for each question. Press 1 to 4 to choose an answer, or move between the answers with the arrow keys and press Enter.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Choose an answer with <kbd>1</kbd>–<kbd>4</kbd>, or move with the arrow keys and press <kbd>Enter</kbd>. After an answer, press <kbd>Enter</kbd> to move on right away. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  /* CORE START: data and pure logic, no DOM. The node harness extracts and tests this block. */
+  // [port, name, transport, category, description, family, optional question text]
+  // Items in the same family (such as SMTP, SMTPS and SMTP submission) are never offered as each other's distractors.
+  const PORTS = [
+    [20, 'FTP data', 'TCP', 'file', 'FTP uses TCP port 20 for the data connection in active mode, while commands go over port 21.', 'ftp', 'Which port does FTP use for its data connection in active mode?'],
+    [21, 'FTP control', 'TCP', 'file', 'FTP sends its commands and replies over TCP port 21, the control connection.', 'ftp', 'Which port does FTP use for its control connection?'],
+    [22, 'SSH', 'TCP', 'remote', 'SSH uses TCP port 22 for encrypted remote logins, and SFTP and SCP run over it too.', ''],
+    [23, 'Telnet', 'TCP', 'remote', 'Telnet uses TCP port 23 for unencrypted remote terminal sessions, which is why SSH replaced it.', ''],
+    [25, 'SMTP', 'TCP', 'mail', 'SMTP uses TCP port 25 to relay email between mail servers.', 'smtp'],
+    [53, 'DNS', 'UDP and TCP', 'infra', 'DNS answers most queries over UDP port 53 and uses TCP port 53 for zone transfers and large responses.', 'dns'],
+    [67, 'DHCP server', 'UDP', 'infra', 'DHCP servers listen on UDP port 67 for clients asking for an IP address.', 'dhcp', 'Which port does a DHCP server listen on?'],
+    [68, 'DHCP client', 'UDP', 'infra', 'DHCP clients receive offers and leases from the server on UDP port 68.', 'dhcp', 'Which port does a DHCP client listen on?'],
+    [69, 'TFTP', 'UDP', 'file', 'TFTP is a minimal file transfer protocol on UDP port 69, often used for network boot and device configs.', ''],
+    [80, 'HTTP', 'TCP', 'web', 'HTTP serves unencrypted web traffic on TCP port 80.', 'http'],
+    [88, 'Kerberos', 'TCP and UDP', 'auth', 'Kerberos issues authentication tickets on port 88 over both UDP and TCP, and Active Directory relies on it.', ''],
+    [110, 'POP3', 'TCP', 'mail', 'POP3 lets mail clients download messages from a server over TCP port 110.', 'pop'],
+    [119, 'NNTP', 'TCP', 'web', 'NNTP carries Usenet newsgroup articles over TCP port 119.', ''],
+    [123, 'NTP', 'UDP', 'infra', 'NTP synchronizes clocks over UDP port 123.', ''],
+    [139, 'NetBIOS Session Service', 'TCP', 'file', 'The NetBIOS Session Service uses TCP port 139 and carried SMB file sharing before SMB moved to port 445.', 'smb', 'Which port does the NetBIOS Session Service use?'],
+    [143, 'IMAP', 'TCP', 'mail', 'IMAP lets mail clients manage messages that stay on the server, over TCP port 143.', 'imap'],
+    [161, 'SNMP', 'UDP', 'infra', 'SNMP managers query devices for status and counters on UDP port 161.', 'snmp'],
+    [162, 'SNMP trap', 'UDP', 'infra', 'Devices send unsolicited SNMP traps to a manager on UDP port 162.', 'snmp', 'Which port receives SNMP traps by default?'],
+    [179, 'BGP', 'TCP', 'infra', 'BGP routers exchange internet routes over TCP port 179.', ''],
+    [389, 'LDAP', 'TCP', 'auth', 'LDAP queries directory services such as Active Directory over TCP port 389.', 'ldap'],
+    [443, 'HTTPS', 'TCP', 'web', 'HTTPS serves web traffic encrypted with TLS on TCP port 443, and HTTP/3 uses UDP port 443.', 'http'],
+    [445, 'SMB', 'TCP', 'file', 'SMB provides Windows file and printer sharing directly over TCP port 445.', 'smb'],
+    [465, 'SMTPS', 'TCP', 'mail', 'SMTPS accepts mail submission over implicit TLS on TCP port 465.', 'smtp'],
+    [500, 'IKE', 'UDP', 'vpn', 'IKE negotiates the keys for IPsec VPN tunnels over UDP port 500.', 'ipsec'],
+    [514, 'Syslog', 'UDP', 'infra', 'Syslog sends log messages to a central collector over UDP port 514.', ''],
+    [587, 'SMTP submission', 'TCP', 'mail', 'Mail clients submit outgoing email on TCP port 587, usually upgrading to TLS with STARTTLS.', 'smtp', 'Which port do mail clients use for SMTP submission with STARTTLS?'],
+    [636, 'LDAPS', 'TCP', 'auth', 'LDAPS is LDAP over TLS on TCP port 636.', 'ldap'],
+    [853, 'DNS over TLS', 'TCP', 'infra', 'DNS over TLS encrypts DNS queries on TCP port 853.', 'dns'],
+    [873, 'rsync', 'TCP', 'file', 'The rsync daemon synchronizes files over TCP port 873.', ''],
+    [993, 'IMAPS', 'TCP', 'mail', 'IMAPS is IMAP over TLS on TCP port 993.', 'imap'],
+    [995, 'POP3S', 'TCP', 'mail', 'POP3S is POP3 over TLS on TCP port 995.', 'pop'],
+    [1194, 'OpenVPN', 'UDP', 'vpn', 'OpenVPN uses UDP port 1194 by default and can also run over TCP.', ''],
+    [1433, 'Microsoft SQL Server', 'TCP', 'db', 'Microsoft SQL Server listens for database connections on TCP port 1433 by default.', ''],
+    [1521, 'Oracle Database', 'TCP', 'db', 'The Oracle Database listener accepts connections on TCP port 1521 by default.', ''],
+    [1723, 'PPTP', 'TCP', 'vpn', 'PPTP sets up its VPN tunnels with a control connection on TCP port 1723.', ''],
+    [1812, 'RADIUS authentication', 'UDP', 'auth', 'RADIUS servers handle network login authentication on UDP port 1812.', 'radius', 'Which port does RADIUS use for authentication by default?'],
+    [1813, 'RADIUS accounting', 'UDP', 'auth', 'RADIUS servers record session accounting data on UDP port 1813.', 'radius', 'Which port does RADIUS use for accounting by default?'],
+    [2049, 'NFS', 'TCP and UDP', 'file', 'NFS shares file systems across a network on port 2049, over TCP in modern versions and over UDP in some older ones.', ''],
+    [3306, 'MySQL', 'TCP', 'db', 'MySQL and MariaDB listen for database connections on TCP port 3306 by default.', ''],
+    [3389, 'RDP', 'TCP and UDP', 'remote', 'RDP provides graphical remote desktop access to Windows on port 3389, over TCP and also UDP.', ''],
+    [4500, 'IPsec NAT traversal', 'UDP', 'vpn', 'IPsec wraps its traffic in UDP port 4500 when a NAT device sits between the two ends.', 'ipsec', 'Which port does IPsec use for NAT traversal?'],
+    [5060, 'SIP', 'UDP and TCP', 'vpn', 'SIP sets up voice and video calls on port 5060 over UDP or TCP.', 'sip'],
+    [5061, 'SIP over TLS', 'TCP', 'vpn', 'SIP over TLS sets up encrypted voice and video calls on TCP port 5061.', 'sip'],
+    [5353, 'mDNS', 'UDP', 'infra', 'Multicast DNS lets devices find each other on a local network over UDP port 5353.', 'dns'],
+    [5432, 'PostgreSQL', 'TCP', 'db', 'PostgreSQL listens for database connections on TCP port 5432 by default.', ''],
+    [5900, 'VNC', 'TCP', 'remote', 'VNC shares a graphical desktop on TCP port 5900 for the first display.', ''],
+    [6379, 'Redis', 'TCP', 'db', 'Redis, an in-memory key-value store, listens on TCP port 6379 by default.', ''],
+    [8080, 'HTTP alternate', 'TCP', 'web', 'TCP port 8080 is the usual alternate HTTP port for proxies, test servers and app servers.', 'http', 'Which port is the usual alternate port for HTTP?'],
+    [27017, 'MongoDB', 'TCP', 'db', 'MongoDB listens for database connections on TCP port 27017 by default.', ''],
+  ].map(([port, name, transport, cat, desc, fam, ask]) => ({ port, name, transport, cat, desc, fam: fam || name, ask }));
+
+  // Returns { text, choices: [4 strings], answer: index, item }.
+  function makeQuestion(item, dir, rand = Math.random) {
+    const others = PORTS.filter(p => p.fam !== item.fam);
+    const same = Arcade.shuffle(others.filter(p => p.cat === item.cat), rand);
+    const rest = Arcade.shuffle(others.filter(p => p.cat !== item.cat), rand);
+    const wrong = [...same.slice(0, 2), ...rest].slice(0, 3);
+    const opts = Arcade.shuffle([item, ...wrong], rand);
+    const label = p => (dir === 'name' ? p.name : String(p.port));
+    const text = dir === 'name'
+      ? `Which protocol uses port ${item.port} by default?`
+      : item.ask || `Which port does ${item.name} use by default?`;
+    return { text, dir, item, choices: opts.map(label), answer: opts.indexOf(item) };
+  }
+  /* CORE END */
+
+  const $ = id => document.getElementById(id);
+  const KEY = 'portMatchBest', TIME = 10000, LIVES = 3;
+  const fmt = n => n.toLocaleString('en-US');
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, streak: 0, n: 0, queue: [], cur: null, t0: 0, timer: 0, adv: 0 };
+  $('best').textContent = fmt(best);
+  const mult = () => 1 + 0.5 * Math.min(Math.max(s.streak - 1, 0), 6);
+  const multText = m => `×${m.toFixed(1).replace(/\.0$/, '')}`;
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function hud() {
+    $('score').textContent = fmt(s.score);
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', `${s.lives} ${s.lives === 1 ? 'life' : 'lives'}`);
+    $('combo').textContent = s.streak > 1 ? `Combo ${multText(mult())} (${s.streak} in a row)` : '';
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, streak: 0, n: 0, queue: [] });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function next() {
+    clearTimeout(s.adv);
+    if (!s.queue.length) s.queue = Arcade.shuffle(PORTS.flatMap(p => [[p, 'name'], [p, 'port']]));
+    const [item, dir] = s.queue.pop();
+    s.cur = makeQuestion(item, dir);
+    s.n++;
+    $('num').textContent = `Question ${s.n}`;
+    $('q').textContent = s.cur.text;
+    $('fb').textContent = ''; $('fb').className = '';
+    $('desc').textContent = '';
+    const box = $('choices');
+    box.innerHTML = '';
+    s.cur.choices.forEach((o, i) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'choice';
+      b.innerHTML = `<kbd>${i + 1}</kbd><span></span>`;
+      b.querySelector('span').textContent = o;
+      b.setAttribute('aria-label', `Answer ${i + 1}: ${o}`);
+      b.addEventListener('click', () => answer(i));
+      box.append(b);
+    });
+    s.state = 'ask';
+    s.t0 = performance.now();
+    box.children[0].focus();
+    tick();
+  }
+
+  function tick() {
+    cancelAnimationFrame(s.timer);
+    if (s.state !== 'ask') return;
+    const left = Math.max(0, TIME - (performance.now() - s.t0));
+    $('bar').style.transform = `scaleX(${left / TIME})`;
+    $('bar').classList.toggle('low', left < 3000);
+    if (left <= 0) return answer(-1);
+    s.timer = requestAnimationFrame(tick);
+  }
+
+  function answer(i) {
+    if (s.state !== 'ask') return;
+    cancelAnimationFrame(s.timer);
+    s.state = 'reveal';
+    const btns = [...$('choices').children];
+    const right = i === s.cur.answer;
+    btns[s.cur.answer].classList.add('right');
+    const fb = $('fb');
+    if (right) {
+      s.streak++;
+      const left = Math.max(0, TIME - (performance.now() - s.t0));
+      const pts = Math.round((50 + 50 * left / TIME) * mult());
+      s.score += pts;
+      fb.textContent = `Correct! +${fmt(pts)} points${s.streak > 1 ? ` with a ${multText(mult())} combo` : ''}.`; fb.className = 'right';
+    } else {
+      if (btns[i]) btns[i].classList.add('wrong');
+      s.streak = 0; s.lives--;
+      fb.textContent = `${i < 0 ? 'Time’s up' : 'Not quite'}. The answer was ${s.cur.choices[s.cur.answer]}.`; fb.className = 'wrong';
+    }
+    $('desc').textContent = s.cur.item.desc;
+    hud();
+    (btns[s.cur.answer]).focus();
+    s.adv = setTimeout(advance, right ? 2500 : 4000);
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    clearTimeout(s.adv);
+    if (s.lives > 0) return next();
+    s.state = 'over';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = fmt(best);
+    showOverlay('Game over', `You scored ${fmt(s.score)} ${s.score === 1 ? 'point' : 'points'} in ${s.n} ${s.n === 1 ? 'question' : 'questions'}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${fmt(best)}.` : '')}`, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (s.state === 'ask') {
+      const i = '1234'.indexOf(e.key);
+      if (i >= 0 && e.key.length === 1) { e.preventDefault(); answer(i); return; }
+      const arrows = { ArrowUp: -2, ArrowDown: 2, ArrowLeft: -1, ArrowRight: 1 };
+      if (e.key in arrows) {
+        e.preventDefault();
+        const btns = [...$('choices').children];
+        const cur = Math.max(0, btns.indexOf(document.activeElement));
+        btns[(cur + arrows[e.key] + 4) % 4].focus();
+      }
+      // Enter or Space on a focused choice clicks it natively.
+    } else if (s.state === 'reveal' && e.key === 'Enter') {
+      e.preventDefault(); if (!e.repeat) advance();
+    } else if ((s.state === 'ready' || s.state === 'over') && e.key === 'Enter') {
+      e.preventDefault(); if (!e.repeat) start();
+    }
+  });
+  $('go').addEventListener('click', start);
+  $('go').focus();
+})();
+</script>

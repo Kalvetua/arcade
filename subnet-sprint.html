@@ -1,0 +1,326 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Subnet Sprint</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: HUD, then a panel with a meta row, timer bar, the address, the question, an answer box and the worked solution. */
+  :root { --accent: #82aaff; }
+  h1 { color: var(--accent); }
+  .cab { max-width: 620px; }
+  .panel { display: flex; flex-direction: column; gap: 14px; min-height: 420px; }
+  .meta { display: flex; justify-content: space-between; gap: 8px; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  #lvl { color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: var(--ground); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+  .bar i.low { background: var(--danger); }
+  #addr { margin: 0; font-size: clamp(1.3rem, 6vw, 1.9rem); font-weight: 600; letter-spacing: 0.02em; overflow-wrap: anywhere; }
+  #addr .pfx { color: var(--accent); }
+  #q { margin: 0; font-size: 1.02rem; line-height: 1.45; }
+  .row { display: flex; gap: 8px; }
+  #ans {
+    flex: 1; min-width: 0; font: 600 1.1rem var(--mono); color: var(--ink); background: var(--ground);
+    border: 0; border-radius: 4px; padding: 10px 12px; box-shadow: inset 0 0 0 1px var(--grid);
+  }
+  #ans:focus, #ans:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  #ans[readonly] { color: var(--muted); }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  #fb { margin: 0; min-height: 1.5em; font-size: 0.9rem; color: var(--muted); line-height: 1.5; }
+  #fb.right { color: var(--good); }
+  #fb.wrong { color: var(--danger); }
+  #work { margin: 0; padding: 12px 14px; background: var(--ground); border-radius: 4px; font-size: 0.82rem; line-height: 1.65; color: var(--ink); }
+  #work p { margin: 0; }
+  #work p + p { margin-top: 4px; }
+  #work b { color: var(--accent); font-weight: 600; }
+  #work code { color: var(--food); }
+  #lives { color: var(--danger); letter-spacing: 0.1em; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="cab">
+  <h1>Subnet Sprint</h1>
+  <p class="rule">Work out network addresses, broadcast addresses, masks and host counts for IPv4 subnets. Faster answers earn more points, and three wrong answers end the game.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="num">Question 1</span><span id="lvl">Level 1</span></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <p id="addr">192.168.10.77<span class="pfx">/26</span></p>
+    <p id="q">Your first question will appear here.</p>
+    <div class="row">
+      <input id="ans" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Your answer" placeholder="Type your answer">
+      <button id="sub" type="button">Submit</button>
+    </div>
+    <p id="fb" aria-live="polite"></p>
+    <div id="work" hidden></div>
+    <button id="next" type="button" hidden>Next question</button>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Each question shows an address with its prefix length. Type your answer and press Enter, and you have 20 seconds for each one.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Type your answer and press <kbd>Enter</kbd> to submit it, then press <kbd>Enter</kbd> again to move on to the next question. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  /* CORE START: pure logic, no DOM. The node harness extracts and tests this block. */
+  const TYPES = ['net', 'bc', 'hosts', 'mask', 'first', 'last', 'same'];
+  const ORD = ['first', 'second', 'third', 'fourth'];
+  const fmt = n => n.toLocaleString('en-US');
+  const dotted = o => o.join('.');
+  const toNum = o => ((o[0] * 256 + o[1]) * 256 + o[2]) * 256 + o[3];
+  const toOct = n => [Math.floor(n / 16777216) % 256, Math.floor(n / 65536) % 256, Math.floor(n / 256) % 256, n % 256];
+  const bin8 = n => n.toString(2).padStart(8, '0');
+
+  // Octet-by-octet subnet math, the way it is done by hand with block sizes.
+  function calc(oct, p) {
+    const mask = [0, 1, 2, 3].map(i => { const bits = Math.max(0, Math.min(8, p - 8 * i)); return 256 - 2 ** (8 - bits); });
+    const net = oct.map((o, i) => o - (o % (256 - mask[i])));
+    const bc = net.map((o, i) => o + (256 - mask[i]) - 1);
+    const hosts = p <= 30 ? 2 ** (32 - p) - 2 : null;
+    const first = [...net]; first[3] += 1;
+    const last = [...bc]; last[3] -= 1;
+    const idx = p % 8 ? Math.floor(p / 8) : p / 8 - 1;
+    return { p, mask, net, bc, hosts, first, last, idx, block: 256 - mask[idx] };
+  }
+  const sameNet = (a, b, p) => dotted(calc(a, p).net) === dotted(calc(b, p).net);
+
+  function prefixFor(level, rand) {
+    if (level === 1) return [8, 16, 24][Math.floor(rand() * 3)];
+    if (level === 2) return 24 + Math.floor(rand() * 7);
+    return 8 + Math.floor(rand() * 23);
+  }
+  function randomIp(rand) {
+    const r = n => Math.floor(rand() * n);
+    const style = r(4);
+    if (style === 0) return [10, r(256), r(256), r(256)];
+    if (style === 1) return [172, 16 + r(16), r(256), r(256)];
+    if (style === 2) return [192, 168, r(256), r(256)];
+    let a; do { a = 1 + r(223); } while (a === 127);
+    return [a, r(256), r(256), r(256)];
+  }
+  const validFirst = o => o[0] >= 1 && o[0] <= 223 && o[0] !== 127;
+
+  function makeQuestion(level, rand = Math.random) {
+    const p = prefixFor(level, rand);
+    let ip, c;
+    do { ip = randomIp(rand); c = calc(ip, p); } while (dotted(ip) === dotted(c.net) || dotted(ip) === dotted(c.bc));
+    const type = TYPES[Math.floor(rand() * TYPES.length)];
+    const q = { ip, p, type, c };
+    if (type === 'same') {
+      const size = 2 ** (32 - p), lo = toNum(c.net);
+      const pickIn = base => { let n; do { n = base + 1 + Math.floor(rand() * (size - 2)); } while (n === toNum(ip)); return toOct(n); };
+      let other = null;
+      if (rand() < 0.5) other = pickIn(lo);
+      else {
+        const dirs = rand() < 0.5 ? [1, -1] : [-1, 1];
+        for (const d of dirs) {
+          const base = lo + d * size;
+          if (base < 0 || base + size > 2 ** 32) continue;
+          const o = pickIn(base);
+          if (validFirst(o)) { other = o; break; }
+        }
+        if (!other) other = pickIn(lo);
+      }
+      q.other = other;
+    }
+    q.answer = answerOf(q);
+    return q;
+  }
+
+  function answerOf(q) {
+    const c = q.c;
+    switch (q.type) {
+      case 'net': return dotted(c.net);
+      case 'bc': return dotted(c.bc);
+      case 'hosts': return fmt(c.hosts);
+      case 'mask': return dotted(c.mask);
+      case 'first': return dotted(c.first);
+      case 'last': return dotted(c.last);
+      case 'same': return sameNet(q.ip, q.other, q.p) ? 'yes' : 'no';
+    }
+  }
+
+  function prompt(q) {
+    switch (q.type) {
+      case 'net': return 'What is the network address of this subnet?';
+      case 'bc': return 'What is the broadcast address of this subnet?';
+      case 'hosts': return 'How many usable host addresses does this subnet have?';
+      case 'mask': return 'What is the subnet mask, written in dotted decimal notation?';
+      case 'first': return 'What is the first usable host address in this subnet?';
+      case 'last': return 'What is the last usable host address in this subnet?';
+      case 'same': return `Is ${dotted(q.other)} in the same subnet as this address? Type y for yes or n for no.`;
+    }
+  }
+
+  const parseIp = s => {
+    const m = String(s).trim().match(/^(\d{1,3})\s*\.\s*(\d{1,3})\s*\.\s*(\d{1,3})\s*\.\s*(\d{1,3})$/);
+    if (!m) return null;
+    const o = m.slice(1).map(Number);
+    return o.some(x => x > 255) ? null : o;
+  };
+
+  // Returns { ok: false, msg } for input in the wrong format, otherwise { ok: true, right }.
+  function check(q, input) {
+    const s = String(input).trim();
+    if (q.type === 'same') {
+      if (/^(y|yes)$/i.test(s)) return { ok: true, right: q.answer === 'yes' };
+      if (/^(n|no)$/i.test(s)) return { ok: true, right: q.answer === 'no' };
+      return { ok: false, msg: 'Please type y for yes or n for no.' };
+    }
+    if (q.type === 'hosts') {
+      const t = s.replace(/[\s,_]/g, '');
+      if (!/^\d+$/.test(t)) return { ok: false, msg: 'Please type the number of hosts as a whole number.' };
+      return { ok: true, right: Number(t) === q.c.hosts };
+    }
+    const o = parseIp(s);
+    if (!o) return { ok: false, msg: 'Please type four numbers from 0 to 255 separated by dots, such as 10.1.2.0.' };
+    return { ok: true, right: dotted(o) === q.answer };
+  }
+
+  // The worked solution, as a list of HTML sentences built only from numbers.
+  function explain(q) {
+    const c = q.c, p = q.p, i = c.idx, h = 32 - p;
+    const lines = [`The mask for /${p} is <b>${dotted(c.mask)}</b>.`];
+    if (p % 8) {
+      const v = q.ip[i], start = c.net[i], end = c.bc[i];
+      lines.push(`In the ${ORD[i]} octet the mask is <code>${bin8(c.mask[i])}</code>, so the block size is 256 − ${c.mask[i]} = ${c.block}.`);
+      lines.push(`The ${ORD[i]} octet of the address is ${v}, which falls in the block from ${start} to ${end}.`);
+    } else {
+      const k = p / 8;
+      const W = ['zero', 'one', 'two', 'three'];
+      lines.push(`A /${p} ends exactly on an octet boundary, so the first ${k === 1 ? 'octet stays' : `${W[k]} octets stay`} the same and the last ${4 - k === 1 ? 'octet runs' : `${W[4 - k]} octets run`} from 0 to 255.`);
+    }
+    lines.push(`So the network address is <b>${dotted(c.net)}</b> and the broadcast address is <b>${dotted(c.bc)}</b>.`);
+    lines.push(`The usable hosts run from <b>${dotted(c.first)}</b> to <b>${dotted(c.last)}</b>, which is 2<sup>${h}</sup> − 2 = <b>${fmt(c.hosts)}</b> hosts.`);
+    if (q.type === 'same') {
+      const inside = q.answer === 'yes';
+      lines.push(`${dotted(q.other)} is ${inside ? 'inside' : 'outside'} that range, so the answer is <b>${q.answer}</b>.`);
+    }
+    return lines;
+  }
+  /* CORE END */
+
+  const $ = id => document.getElementById(id);
+  const KEY = 'subnetSprintBest', TIME = 20000, LIVES = 3;
+  let best = Arcade.best(KEY);
+  const s = { state: 'ready', score: 0, lives: LIVES, n: 0, cur: null, t0: 0, timer: 0 };
+  $('best').textContent = fmt(best);
+  const levelOf = n => (n <= 5 ? 1 : n <= 12 ? 2 : 3);
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function hud() {
+    $('score').textContent = fmt(s.score);
+    $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+    $('lives').setAttribute('aria-label', `${s.lives} ${s.lives === 1 ? 'life' : 'lives'}`);
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, lives: LIVES, n: 0 });
+    $('ov').hidden = true;
+    hud();
+    next();
+  }
+
+  function next() {
+    s.n++;
+    const level = levelOf(s.n);
+    s.cur = makeQuestion(level);
+    $('num').textContent = `Question ${s.n}`;
+    $('lvl').textContent = `Level ${level}`;
+    $('addr').innerHTML = `${dotted(s.cur.ip)}<span class="pfx">/${s.cur.p}</span>`;
+    $('q').textContent = prompt(s.cur);
+    $('fb').textContent = ''; $('fb').className = '';
+    $('work').hidden = true; $('next').hidden = true;
+    const a = $('ans');
+    a.readOnly = false; a.value = '';
+    a.placeholder = s.cur.type === 'same' ? 'Type y or n' : s.cur.type === 'hosts' ? 'Type a number' : 'Type an address';
+    $('sub').hidden = false;
+    s.state = 'ask';
+    s.t0 = performance.now();
+    a.focus();
+    tick();
+  }
+
+  function tick() {
+    cancelAnimationFrame(s.timer);
+    if (s.state !== 'ask') return;
+    const left = Math.max(0, TIME - (performance.now() - s.t0));
+    $('bar').style.transform = `scaleX(${left / TIME})`;
+    $('bar').classList.toggle('low', left < 5000);
+    if (left <= 0) return finish(false, true);
+    s.timer = requestAnimationFrame(tick);
+  }
+
+  function submit() {
+    if (s.state !== 'ask') return;
+    const v = $('ans').value;
+    if (!v.trim()) return;
+    const r = check(s.cur, v);
+    if (!r.ok) { $('fb').textContent = r.msg; $('fb').className = ''; $('ans').select(); return; }
+    finish(r.right, false);
+  }
+
+  function finish(right, timeout) {
+    if (s.state !== 'ask') return;
+    cancelAnimationFrame(s.timer);
+    s.state = 'reveal';
+    const fb = $('fb');
+    if (right) {
+      const left = Math.max(0, TIME - (performance.now() - s.t0));
+      const pts = Math.round(50 + 150 * left / TIME) + 25 * (levelOf(s.n) - 1);
+      s.score += pts;
+      fb.textContent = `Correct! +${fmt(pts)} points.`; fb.className = 'right';
+    } else {
+      s.lives--;
+      fb.textContent = `${timeout ? 'Time’s up' : 'Not quite'}. The answer was ${s.cur.answer}.`; fb.className = 'wrong';
+    }
+    hud();
+    $('work').innerHTML = explain(s.cur).map(l => `<p>${l}</p>`).join('');
+    $('work').hidden = false;
+    $('ans').readOnly = true;
+    $('sub').hidden = true;
+    const nb = $('next');
+    nb.textContent = s.lives > 0 ? 'Next question' : 'See your result';
+    nb.hidden = false;
+    nb.focus();
+  }
+
+  function advance() {
+    if (s.state !== 'reveal') return;
+    if (s.lives > 0) return next();
+    s.state = 'over';
+    const prev = best;
+    best = Arcade.record(KEY, s.score);
+    $('best').textContent = fmt(best);
+    const qs = `${s.n} ${s.n === 1 ? 'question' : 'questions'}`;
+    showOverlay('Game over', `You scored ${fmt(s.score)} ${s.score === 1 ? 'point' : 'points'} in ${qs}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${fmt(best)}.` : '')}`, 'Play again');
+  }
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.key !== 'Enter') return;
+    e.preventDefault();
+    if (e.repeat) return;
+    if (s.state === 'ask') submit();
+    else if (s.state === 'reveal') advance();
+    else start();
+  });
+  $('go').addEventListener('click', start);
+  $('sub').addEventListener('click', submit);
+  $('next').addEventListener('click', advance);
+  $('go').focus();
+})();
+</script>

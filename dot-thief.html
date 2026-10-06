@@ -1,0 +1,694 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Dot Thief</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: HUD above a tile vault drawn on a canvas, a small readout line under it, D-pad on touch screens. */
+  :root { --accent: #ff6b6b; --wall: #2c4a5a; --wall-face: #0a1820; --smoke: #a9b4bd; --hood: #262a3a; --sack: #b98a5a; }
+  h1 .w1 { color: var(--accent); }
+  h1 .w2 { color: var(--food); }
+  .panel { padding: 12px; }
+  canvas {
+    width: 100%; display: block; aspect-ratio: 21 / 22;
+    border-radius: 4px; touch-action: none;
+  }
+  .sub {
+    display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+    margin: 10px 2px 0; font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .sub b { color: var(--ink); font-weight: 600; }
+  #pw { color: var(--smoke); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .pad { display: none; grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(2, 56px); gap: 6px; justify-content: center; }
+  .pad button { background: var(--board); color: var(--ink); padding: 0; font-size: 1.2rem; box-shadow: inset 0 0 0 1px var(--grid); }
+  .pad .up { grid-column: 2; }
+  .pad .left { grid-column: 1; grid-row: 2; }
+  .pad .down { grid-column: 2; grid-row: 2; }
+  .pad .right { grid-column: 3; grid-row: 2; }
+  @media (pointer: coarse) { .pad { display: grid; } }
+  #go:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+</style>
+
+<div class="cab">
+  <h1><span class="w1">Dot</span> <span class="w2">Thief</span></h1>
+  <p class="rule">You are the night guard, and you win a level by catching the thief before it steals every coin in the vault. Each catch scores 1,000 points times the level, plus 10 points for every coin still on the floor.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives">3</span></div>
+  </div>
+
+  <div class="panel">
+    <canvas id="c" aria-label="Vault maze with the thief and your guard"></canvas>
+    <div class="sub">
+      <span>Level <b id="lvl">1</b></span>
+      <span id="pw" hidden></span>
+      <span>Coins left <b id="dots">0</b></span>
+    </div>
+    <p class="sr" id="msg" aria-live="polite"></p>
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Steer the guard with the arrow keys or WASD, and catch the thief before it collects every coin. If the thief sets off a smoke bomb, you are blinded for a few seconds and it can knock you out, so keep your distance until the smoke clears.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <div class="pad" aria-label="Direction buttons">
+    <button class="up" data-d="up" type="button" aria-label="Move up">▲</button>
+    <button class="left" data-d="left" type="button" aria-label="Move left">◀</button>
+    <button class="down" data-d="down" type="button" aria-label="Move down">▼</button>
+    <button class="right" data-d="right" type="button" aria-label="Move right">▶</button>
+  </div>
+
+  <p class="keys">Steer the guard with the arrow keys or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, press <kbd>Space</kbd> or <kbd>P</kbd> to pause, and press <kbd>Enter</kbd> to start. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+/*CORE*/
+const Core = (() => {
+  const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
+  const ORDER = ['up', 'left', 'down', 'right'];
+
+  // Left halves (columns 0-10) of each maze; the right half is mirrored.
+  // # wall, . coin, o smoke bomb, - guard-room door, G guard room. A row open at column 0 is a wrap-around tunnel.
+  const MAZES = [
+    { thief: [10, 16], half: [
+      '###########',
+      '#o........#',
+      '#.##.####.#',
+      '#.##.####.#',
+      '#..........',
+      '#.##.#.####',
+      '#....#....#',
+      '####.####.#',
+      '####.#.....',
+      '####.#.###-',
+      '.......#GGG',
+      '####.#.####',
+      '####.#.....',
+      '####.#.####',
+      '#.........#',
+      '#.##.####.#',
+      '#o.#.......',
+      '##.#.#.####',
+      '#....#....#',
+      '#.#######.#',
+      '#..........',
+      '###########',
+    ] },
+    { thief: [10, 20], half: [
+      '###########',
+      '#.....#....',
+      '#.###.#.###',
+      '#o###.....#',
+      '#.....###.#',
+      '###.#.....#',
+      '###.#.###.#',
+      '#...#.#...#',
+      '#.###.#.#..',
+      '#.....#.##-',
+      '###.#...#GG',
+      '....#.#.###',
+      '###.#.#....',
+      '#.....#.###',
+      '#.###.....#',
+      '#o.##.###.#',
+      '##.##.#....',
+      '#.....#.###',
+      '#.###.#...#',
+      '#.#...###.#',
+      '#...#......',
+      '###########',
+    ] },
+    { thief: [10, 20], half: [
+      '###########',
+      '#o...#.....',
+      '#.##.#.##.#',
+      '#.........#',
+      '#.##.###.##',
+      '#..#...#...',
+      '##.###.#.##',
+      '##.....#..#',
+      '####.#.....',
+      '####.#.###-',
+      '.....#.#GGG',
+      '####.#.####',
+      '#......#...',
+      '#.###.##.##',
+      '#o..#......',
+      '###.#.#.###',
+      '#.....#...#',
+      '#.###.###.#',
+      '#...#.....#',
+      '#.#.#.###.#',
+      '#..........',
+      '###########',
+    ] },
+  ];
+
+  function build(def) {
+    const rows = def.half.map(r => r + [...r.slice(0, 10)].reverse().join(''));
+    const h = rows.length, w = rows[0].length;
+    let door = null;
+    rows.forEach((r, y) => { const x = r.indexOf('-'); if (x >= 0) door = [x, y]; });
+    return { w, h, rows, door, thief: def.thief, post: [door[0], door[1] + 1], ally: [door[0] - 1, door[1] + 1] };
+  }
+  const MAPS = MAZES.map(build);
+
+  const wrapX = (m, x) => (x + m.w) % m.w;
+  const tile = (m, x, y) => (y < 0 || y >= m.h) ? '#' : m.rows[y][wrapX(m, x)];
+  const idx = (m, x, y) => y * m.w + wrapX(m, x);
+  const thiefOpen = (m, x, y) => { const c = tile(m, x, y); return c !== '#' && c !== '-' && c !== 'G'; };
+  const guardOpen = (m, x, y) => tile(m, x, y) !== '#';
+  const thiefCan = (m, x, y, d) => thiefOpen(m, x + DIRS[d][0], y + DIRS[d][1]);
+  function guardCan(m, x, y, d) {
+    const c = tile(m, x + DIRS[d][0], y + DIRS[d][1]);
+    if (c === '#') return false;
+    if (c === '-') return d === 'up';
+    if (c === 'G') return tile(m, x, y) === 'G';
+    return true;
+  }
+
+  // Breadth-first distances from (sx, sy). Returns Int16Array, -1 = unreachable.
+  function bfs(m, sx, sy, open, blocked = -1, limit = 9999) {
+    const dist = new Int16Array(m.w * m.h).fill(-1);
+    const q = [idx(m, sx, sy)];
+    dist[q[0]] = 0;
+    for (let i = 0; i < q.length; i++) {
+      const c = q[i], x = c % m.w, y = c / m.w | 0;
+      if (dist[c] >= limit) continue;
+      for (const d of ORDER) {
+        const nx = x + DIRS[d][0], ny = y + DIRS[d][1];
+        if (!open(m, nx, ny)) continue;
+        const n = idx(m, nx, ny);
+        if (dist[n] >= 0 || n === blocked) continue;
+        dist[n] = dist[c] + 1; q.push(n);
+      }
+    }
+    return dist;
+  }
+
+  function cfg(level) {
+    const L = Math.min(level, 8);
+    return {
+      thiefSpeed: Math.min(8.0, 6.3 + 0.3 * (L - 1)),
+      guardSpeed: 7.0 + 0.1 * (L - 1),
+      stunSpeed: 5.0,
+      allySpeed: 5.4 + 0.15 * (L - 3),
+      smoke: Math.max(3.5, 6 - 0.4 * (L - 1)),
+      danger: Math.min(11, 5 + L),
+      look: 6 + 2 * L,
+      noise: Math.max(0.6, 3.2 - 0.5 * L),
+      chase: Math.min(0.75, 0.45 + 0.05 * L),
+    };
+  }
+
+  function newLevel(level, rng = Math.random) {
+    const m = MAPS[(level - 1) % MAPS.length];
+    const g = { level, m, rng, c: cfg(level), dots: new Uint8Array(m.w * m.h), dotsLeft: 0, smoke: 0, time: 0, idle: 0 };
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+      const ch = m.rows[y][x];
+      if (ch === '.' || ch === 'o') { g.dots[idx(m, x, y)] = ch === 'o' ? 2 : 1; g.dotsLeft++; }
+    }
+    g.dots[idx(m, m.thief[0], m.thief[1])] && (g.dots[idx(m, m.thief[0], m.thief[1])] = 0, g.dotsLeft--);
+    placeActors(g);
+    return g;
+  }
+
+  function placeActors(g) {
+    const m = g.m;
+    g.thief = { x: m.thief[0], y: m.thief[1], dir: 'left', t: 0, step: 0 };
+    g.me = { x: m.post[0], y: m.post[1], dir: null, t: 0, want: null, out: 0, blind: false };
+    g.ally = g.level >= 3 ? { x: m.ally[0], y: m.ally[1], dir: null, t: 0, out: 2.5, blind: false, ally: true } : null;
+    if (g.ally) g.ally.hidden = false;
+    g.smoke = 0; g.idle = 0;
+    thiefDecide(g);
+  }
+
+  const pos = e => e.dir ? [e.x + DIRS[e.dir][0] * e.t, e.y + DIRS[e.dir][1] * e.t] : [e.x, e.y];
+  const near = e => (e.dir && e.t > 0.5) ? [e.x + DIRS[e.dir][0], e.y + DIRS[e.dir][1]] : [e.x, e.y];
+  function gap(m, a, b) {
+    let dx = Math.abs(a[0] - b[0]); dx = Math.min(dx, m.w - dx);
+    return Math.hypot(dx, a[1] - b[1]);
+  }
+  const active = e => e && e.out <= 0;
+
+  // Turn the player's guard. A reversal happens at once, other turns wait for the next tile.
+  function steer(g, d) {
+    const e = g.me;
+    e.want = d;
+    if (e.out <= 0 && e.dir && d === OPP[e.dir] && e.t > 0) {
+      e.x = wrapX(g.m, e.x + DIRS[e.dir][0]); e.y += DIRS[e.dir][1];
+      e.dir = d; e.t = 1 - e.t;
+    }
+  }
+
+  function meDecide(g) {
+    const e = g.me, m = g.m;
+    if (e.want && guardCan(m, e.x, e.y, e.want)) e.dir = e.want;
+    else if (!(e.dir && guardCan(m, e.x, e.y, e.dir))) e.dir = null;
+  }
+
+  function allyDecide(g) {
+    const e = g.ally, m = g.m, p = near(g.thief);
+    let opts = ORDER.filter(d => d !== OPP[e.dir] && guardCan(m, e.x, e.y, d));
+    if (!opts.length) opts = ORDER.filter(d => guardCan(m, e.x, e.y, d));
+    if (!opts.length) { e.dir = null; return; }
+    const dist = bfs(m, p[0], p[1], guardOpen);
+    const val = d => { const v = dist[idx(m, e.x + DIRS[d][0], e.y + DIRS[d][1])]; return v < 0 ? 999 : v; };
+    if (e.blind) e.dir = opts.reduce((a, b) => val(b) > val(a) ? b : a);
+    else if (g.rng() < g.c.chase || tile(m, e.x, e.y) === 'G') e.dir = opts.reduce((a, b) => val(b) < val(a) ? b : a);
+    else e.dir = opts[Math.floor(g.rng() * opts.length)];
+  }
+
+  function nearestFrom(g, d, kind) {
+    // Smallest distance in map d to a dot (kind 0 = any, 2 = smoke bomb), plus a density score.
+    let best = 999, dens = 0;
+    for (let i = 0; i < d.length; i++) {
+      if (d[i] < 0 || !g.dots[i]) continue;
+      if (kind === 2 && g.dots[i] !== 2) continue;
+      if (d[i] < best) best = d[i];
+      if (d[i] <= g.c.look) dens += 1 / (1 + d[i]);
+    }
+    return [best, dens];
+  }
+
+  function thiefDecide(g) {
+    const m = g.m, p = g.thief, c = g.c;
+    let opts = ORDER.filter(d => d !== OPP[p.dir] && thiefCan(m, p.x, p.y, d));
+    if (!opts.length) opts = ORDER.filter(d => thiefCan(m, p.x, p.y, d));
+    if (!opts.length) { p.dir = null; return; }
+    if (opts.length === 1) { p.dir = opts[0]; return; }
+
+    const guards = [g.me, g.ally].filter(active);
+    const threats = guards.filter(e => !e.blind), prey = guards.filter(e => e.blind);
+    const mapOf = list => {
+      if (!list.length) return null;
+      const maps = list.map(e => { const q = near(e); return bfs(m, q[0], q[1], guardOpen); });
+      const out = new Int16Array(m.w * m.h).fill(999);
+      maps.forEach(d => d.forEach((v, i) => { if (v >= 0 && v < out[i]) out[i] = v; }));
+      return out;
+    };
+    const tMap = mapOf(threats), pMap = g.smoke > 1 ? mapOf(prey) : null;
+    const here = idx(m, p.x, p.y);
+    const myGd = tMap ? tMap[here] : 999;
+    const R = g.idle > 1.5 ? 2 : c.danger;
+
+    let bestD = opts[0], bestS = -Infinity;
+    for (const d of opts) {
+      const nx = wrapX(m, p.x + DIRS[d][0]), ny = p.y + DIRS[d][1], n = idx(m, nx, ny);
+      let s = g.rng() * c.noise;
+      const gd = tMap ? tMap[n] : 999;
+      if (gd <= 1) s -= 1000;
+      if (pMap) {
+        s -= pMap[n] * 10;
+      } else {
+        if (gd < R) s -= (R - gd) * (R - gd) * 3;
+        let dm = bfs(m, nx, ny, thiefOpen, here);
+        let [d0, dens] = nearestFrom(g, dm, 0);
+        if (d0 === 999) d0 = 60;
+        s += -1.5 * d0 + dens;
+        if (myGd < R + 3) {
+          const [pd] = nearestFrom(g, dm, 2);
+          if (pd < 14) s += (14 - pd) * 2;
+        }
+      }
+      if (s > bestS) { bestS = s; bestD = d; }
+    }
+    p.dir = bestD;
+  }
+
+  // Move an actor along the maze; decide() is called on every tile it reaches.
+  function move(g, e, speed, dt, decide, arrive) {
+    let left = speed * dt;
+    for (let n = 0; left > 1e-9 && n < 8; n++) {
+      if (!e.dir) { decide(); if (!e.dir) return; }
+      const rest = 1 - e.t;
+      if (left < rest) { e.t += left; return; }
+      left -= rest;
+      e.x = wrapX(g.m, e.x + DIRS[e.dir][0]); e.y += DIRS[e.dir][1]; e.t = 0;
+      if (arrive) arrive();
+      decide();
+    }
+  }
+
+  function startSmoke(g) {
+    g.smoke = g.c.smoke;
+    for (const e of [g.me, g.ally]) if (active(e)) e.blind = true;
+  }
+
+  // Advance the game by dt seconds. Returns a list of events.
+  function update(g, dt) {
+    const ev = [], m = g.m, c = g.c;
+    if (g.over) return ev;
+    g.time += dt;
+    if (g.smoke > 0) {
+      g.smoke -= dt;
+      if (g.smoke <= 0) { g.smoke = 0; g.me.blind = false; if (g.ally) g.ally.blind = false; ev.push({ type: 'smokeEnd' }); }
+    }
+
+    const me = g.me;
+    if (me.out > 0) {
+      me.out -= dt;
+      if (me.out <= 0) { me.x = m.post[0]; me.y = m.post[1]; me.dir = null; me.t = 0; me.blind = false; ev.push({ type: 'respawn' }); }
+    } else {
+      move(g, me, me.blind ? c.stunSpeed : c.guardSpeed, dt, () => meDecide(g));
+    }
+    g.idle = (me.out > 0 || (!me.dir && me.t === 0)) ? g.idle + dt : 0;
+
+    const al = g.ally;
+    if (al) {
+      if (al.out > 0) {
+        al.out -= dt;
+        if (al.out <= 0) { al.x = m.ally[0]; al.y = m.ally[1]; al.dir = null; al.t = 0; al.blind = false; }
+      } else {
+        move(g, al, al.blind ? c.stunSpeed * 0.9 : c.allySpeed, dt, () => allyDecide(g));
+      }
+    }
+
+    const p = g.thief;
+    move(g, p, g.smoke > 0 ? c.thiefSpeed * 1.05 : c.thiefSpeed, dt, () => thiefDecide(g), () => {
+      const i = idx(m, p.x, p.y);
+      if (g.dots[i]) {
+        const kind = g.dots[i];
+        g.dots[i] = 0; g.dotsLeft--;
+        if (kind === 2) { startSmoke(g); ev.push({ type: 'smoke' }); }
+      }
+    });
+    p.step += dt;
+
+    // Collisions
+    const pp = pos(p);
+    for (const e of [me, al]) {
+      if (!active(e) || gap(m, pos(e), pp) >= 0.75) continue;
+      if (e.blind) {
+        e.out = e === me ? 2 : 3; e.blind = false;
+        ev.push({ type: e === me ? 'knocked' : 'allyKnocked' });
+      } else {
+        g.over = 'caught';
+        ev.push({ type: 'caught', by: e === me ? 'me' : 'ally', dotsLeft: g.dotsLeft });
+        return ev;
+      }
+    }
+    if (g.dotsLeft <= 0) { g.over = 'cleared'; ev.push({ type: 'cleared' }); }
+    return ev;
+  }
+
+  return { DIRS, OPP, ORDER, MAPS, tile, idx, thiefOpen, guardOpen, guardCan, thiefCan, bfs, cfg, newLevel, placeActors, update, steer, pos, near, wrapX };
+})();
+/*END CORE*/
+
+  const { DIRS, MAPS, idx } = Core;
+  const KEY = 'dotThiefBest';
+  const RM = matchMedia('(prefers-reduced-motion: reduce)');
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const C = {
+    board: css('--board'), ground: css('--ground'), grid: css('--grid'), wall: css('--wall'), face: css('--wall-face'),
+    ink: css('--ink'), food: css('--food'), accent: css('--accent'), ally: css('--good'), danger: css('--danger'),
+    muted: css('--muted'), smoke: css('--smoke'), hood: css('--hood'), sack: css('--sack'),
+  };
+  const fmt = n => n.toLocaleString('en-US');
+  const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`;
+
+  let best = Arcade.best(KEY);
+  $('best').textContent = fmt(best);
+
+  let g, state = 'ready', score = 0, lives = 3, level = 1, last = 0, acc = 0, after = null;
+
+  function say(t) { $('msg').textContent = t; }
+  function hud() {
+    $('score').textContent = fmt(score);
+    $('lives').textContent = lives;
+    $('lvl').textContent = level;
+    $('dots').textContent = g.dotsLeft;
+    const pw = $('pw');
+    if (g.smoke > 0 && g.me.blind && !g.over) { pw.hidden = false; pw.textContent = `Smoke clears in ${g.smoke.toFixed(1)} seconds`; }
+    else pw.hidden = true;
+  }
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); say(`${t}. ${p}`); }
+  function hideOverlay() { $('ov').hidden = true; if (document.activeElement === $('go')) $('go').blur(); }
+
+  function newGame() { score = 0; lives = 3; level = 1; g = Core.newLevel(level); hud(); }
+
+  function run() {
+    state = 'run'; last = performance.now(); acc = 0;
+    hideOverlay(); hud();
+  }
+
+  // Overlay button / Enter: what happens next depends on the current state.
+  function go() {
+    if (state === 'run') return;
+    if (state === 'over') newGame();
+    if (state === 'between') { after && after(); after = null; }
+    run();
+  }
+
+  function togglePause() {
+    if (state === 'run') { state = 'pause'; showOverlay('Paused', 'Take your time. The thief will wait for you.', 'Resume'); }
+    else if (state === 'pause') run();
+  }
+
+  function gameOver(reason) {
+    state = 'over';
+    const isNew = score > best;
+    best = Arcade.record(KEY, score);
+    $('best').textContent = fmt(best);
+    hud();
+    showOverlay('Game over', `${reason} You scored ${plural(score, 'point', 'points')}. ${isNew ? 'That’s a new best!' : (best ? `Your best is ${fmt(best)}.` : '')}`, 'Play again');
+  }
+
+  function handle(ev) {
+    for (const e of ev) {
+      if (e.type === 'smoke') say('The thief set off a smoke bomb. You are blinded, so keep away from it until the smoke clears.');
+      else if (e.type === 'smokeEnd') say('The smoke has cleared. Go catch the thief!');
+      else if (e.type === 'allyKnocked') say('The thief knocked out your partner, but your partner will be back on patrol soon.');
+      else if (e.type === 'respawn') say('You are back at the guard post.');
+      else if (e.type === 'knocked') {
+        lives--; hud();
+        if (lives <= 0) return gameOver('The thief knocked you out while you were blinded, and you are out of lives.');
+        say(`The thief knocked you out while you were blinded. You have ${plural(lives, 'life', 'lives')} left, and you will be back in two seconds.`);
+      } else if (e.type === 'caught') {
+        const gain = 1000 * level + 10 * e.dotsLeft;
+        score += gain;
+        const next = level + 1;
+        let note = `On level ${next}, the thief moves a little faster and thinks further ahead.`;
+        if (next === 3) note = `On level 3, a second guard joins your patrol and the thief gets faster.`;
+        else if ((next - 1) % MAPS.length !== (level - 1) % MAPS.length) note = `Level ${next} has a new vault and a faster thief.`;
+        state = 'between';
+        after = () => { level = next; g = Core.newLevel(level); };
+        hud();
+        const who = e.by === 'ally' ? 'Your partner caught the thief' : 'You caught the thief';
+        showOverlay('Caught!', `${who} with ${plural(e.dotsLeft, 'coin', 'coins')} still on the floor, which earns ${plural(gain, 'point', 'points')}. ${note}`, 'Next level');
+        return;
+      } else if (e.type === 'cleared') {
+        lives--; hud();
+        if (lives <= 0) return gameOver('The thief collected every coin, and you are out of lives.');
+        state = 'between';
+        after = () => { g = Core.newLevel(level); };
+        showOverlay('Vault emptied', `The thief collected every coin, so you lose a life. You have ${plural(lives, 'life', 'lives')} left to try this level again.`, 'Try again');
+        return;
+      }
+    }
+  }
+
+  // ---------- Drawing ----------
+  let scale = 1;
+  function resize() {
+    const m = g.m, dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth || 420;
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(w * m.h / m.w * dpr);
+    scale = cv.width / m.w;
+  }
+
+  // Vault floor in a checker of tiles, stone wall blocks with a dark front face, and a barred gate on the guard room.
+  function drawVault(m) {
+    const wall = (x, y) => x >= 0 && x < m.w && y >= 0 && y < m.h && m.rows[y][x] === '#';
+    ctx.fillStyle = C.grid;
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (!wall(x, y) && (x + y) % 2) ctx.fillRect(x, y, 1, 1);
+    ctx.fillStyle = C.wall;
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (wall(x, y)) ctx.fillRect(x, y, 1.02, 1.02);
+    ctx.fillStyle = C.face;
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) if (wall(x, y) && y + 1 < m.h && !wall(x, y + 1)) ctx.fillRect(x, y + 0.7, 1.02, 0.3);
+    ctx.strokeStyle = C.muted; ctx.globalAlpha = 0.35; ctx.lineWidth = 0.05;
+    ctx.beginPath();
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+      if (!wall(x, y)) continue;
+      if (y > 0 && !wall(x, y - 1)) { ctx.moveTo(x, y + 0.03); ctx.lineTo(x + 1, y + 0.03); }
+      if (x > 0 && !wall(x - 1, y)) { ctx.moveTo(x + 0.03, y); ctx.lineTo(x + 0.03, y + 0.7); }
+      if (x + 1 < m.w && !wall(x + 1, y)) { ctx.moveTo(x + 0.97, y); ctx.lineTo(x + 0.97, y + 0.7); }
+    }
+    ctx.stroke(); ctx.globalAlpha = 1;
+    const [dx, dy] = m.door;
+    ctx.fillStyle = C.muted;
+    ctx.fillRect(dx, dy + 0.42, 1, 0.08);
+    for (let i = 0; i < 4; i++) ctx.fillRect(dx + 0.1 + i * 0.26, dy + 0.12, 0.07, 0.76);
+  }
+
+  const facing = new WeakMap();
+  // A guard: round body in uniform color, dark cap with a brim and badge, and a flashlight cone in the facing direction.
+  function drawGuard(e, body, now, you) {
+    const [x, y] = Core.pos(e), cx = x + 0.5, cy = y + 0.5;
+    if (e.dir) facing.set(e, e.dir);
+    const dir = e.dir || facing.get(e) || 'down';
+    const [lx, ly] = DIRS[dir];
+    if (!e.blind) {
+      const ang = Math.atan2(ly, lx);
+      ctx.fillStyle = C.food; ctx.globalAlpha = 0.2;
+      ctx.beginPath(); ctx.moveTo(cx + lx * 0.3, cy + ly * 0.3); ctx.arc(cx, cy, 2.4, ang - 0.4, ang + 0.4); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    const flash = e.blind && g.smoke < 1.5 && !RM.matches && Math.floor(now / 160) % 2;
+    ctx.fillStyle = e.blind ? (flash ? body : C.smoke) : body;
+    ctx.beginPath(); ctx.arc(cx, cy + 0.05, 0.37, 0, 7); ctx.fill();
+    ctx.fillStyle = C.ground;
+    ctx.beginPath(); ctx.arc(cx, cy - 0.06, 0.3, Math.PI, 0); ctx.fill();
+    ctx.fillRect(cx - 0.4, cy - 0.08, 0.8, 0.1);
+    ctx.fillStyle = C.food;
+    ctx.beginPath(); ctx.arc(cx, cy - 0.2, 0.06, 0, 7); ctx.fill();
+    const ex = lx * 0.06, ey = 0.13 + ly * 0.04;
+    ctx.fillStyle = C.ground; ctx.strokeStyle = C.ground; ctx.lineWidth = 0.05;
+    for (const s of [-1, 1]) {
+      const px = cx + s * 0.14 + ex, py = cy + ey;
+      if (e.blind) {
+        ctx.beginPath();
+        ctx.moveTo(px - 0.05, py - 0.05); ctx.lineTo(px + 0.05, py + 0.05);
+        ctx.moveTo(px + 0.05, py - 0.05); ctx.lineTo(px - 0.05, py + 0.05);
+        ctx.stroke();
+      } else { ctx.beginPath(); ctx.arc(px, py, 0.055, 0, 7); ctx.fill(); }
+    }
+    if (e.blind) {
+      ctx.fillStyle = C.smoke; ctx.globalAlpha = 0.45;
+      const t = RM.matches ? 0 : now / 400;
+      for (let i = 0; i < 3; i++) {
+        const a = t + i * 2.1;
+        ctx.beginPath(); ctx.arc(cx + Math.cos(a) * 0.45, cy - 0.15 + Math.sin(a) * 0.2, 0.14, 0, 7); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (you) {
+      ctx.strokeStyle = C.ink; ctx.lineWidth = 0.07;
+      ctx.beginPath(); ctx.arc(cx, cy, 0.62, 0, 7); ctx.stroke();
+    }
+  }
+
+  // The thief: a dark hooded figure with a bright eye-mask band, carrying a coin sack behind it.
+  function drawThief(p) {
+    const [x, y] = Core.pos(p);
+    const bob = RM.matches || state !== 'run' ? 0 : Math.sin(p.step * 14) * 0.03;
+    const cx = x + 0.5, cy = y + 0.5 + bob;
+    const [lx, ly] = DIRS[p.dir || 'left'];
+    const sx = cx - lx * 0.42 + (ly ? 0.3 : 0), sy = cy - ly * 0.34 + 0.14;
+    ctx.fillStyle = C.sack;
+    ctx.beginPath(); ctx.arc(sx, sy, 0.2, 0, 7); ctx.fill();
+    ctx.fillRect(sx - 0.05, sy - 0.26, 0.1, 0.1);
+    ctx.fillStyle = C.hood; ctx.strokeStyle = C.ink; ctx.lineWidth = 0.05;
+    ctx.beginPath();
+    ctx.moveTo(cx - 0.15, cy - 0.33); ctx.lineTo(cx, cy - 0.5); ctx.lineTo(cx + 0.15, cy - 0.33);
+    ctx.arc(cx, cy, 0.36, -Math.PI / 2 + 0.42, -Math.PI / 2 - 0.42 + Math.PI * 2);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = C.ink;
+    ctx.fillRect(cx - 0.3 + lx * 0.04, cy - 0.11, 0.6, 0.17);
+    ctx.fillStyle = C.hood;
+    for (const s of [-1, 1]) { ctx.beginPath(); ctx.arc(cx + s * 0.12 + lx * 0.07, cy - 0.025 + ly * 0.03, 0.05, 0, 7); ctx.fill(); }
+    if (g.smoke > 0) {
+      ctx.strokeStyle = C.danger; ctx.lineWidth = 0.08;
+      ctx.beginPath(); ctx.arc(cx, cy, 0.58, 0, 7); ctx.stroke();
+    }
+  }
+
+  function draw(now) {
+    const m = g.m;
+    if (cv.width !== Math.round((cv.clientWidth || 420) * (window.devicePixelRatio || 1))) resize();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = C.board; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    drawVault(m);
+    const pulse = RM.matches ? 0 : Math.sin(now / 160) * 0.03;
+    for (let y = 0; y < m.h; y++) for (let x = 0; x < m.w; x++) {
+      const d = g.dots[idx(m, x, y)];
+      if (!d) continue;
+      if (d === 1) {
+        ctx.fillStyle = C.food;
+        ctx.beginPath(); ctx.arc(x + 0.5, y + 0.5, 0.11, 0, 7); ctx.fill();
+      } else {
+        // Smoke bomb: a gray ball with a short fuse and a spark.
+        ctx.fillStyle = C.smoke;
+        ctx.beginPath(); ctx.arc(x + 0.47, y + 0.56, 0.23 + pulse, 0, 7); ctx.fill();
+        ctx.strokeStyle = C.muted; ctx.lineWidth = 0.06;
+        ctx.beginPath(); ctx.moveTo(x + 0.58, y + 0.36); ctx.lineTo(x + 0.72, y + 0.2); ctx.stroke();
+        ctx.fillStyle = C.accent;
+        ctx.beginPath(); ctx.arc(x + 0.74, y + 0.18, 0.07 + pulse, 0, 7); ctx.fill();
+      }
+    }
+    if (g.ally && g.ally.out <= 0) drawGuard(g.ally, C.ally, now, false);
+    if (g.me.out <= 0) drawGuard(g.me, C.accent, now, true);
+    drawThief(g.thief);
+    if (g.me.out > 0) {
+      const [hx, hy] = m.post;
+      ctx.fillStyle = C.accent; ctx.globalAlpha = 0.35 + 0.3 * Math.abs(Math.sin(now / 200));
+      ctx.beginPath(); ctx.arc(hx + 0.5, hy + 0.5, 0.3, 0, 7); ctx.fill(); ctx.globalAlpha = 1;
+    }
+  }
+
+  function loop(now) {
+    if (state === 'run') {
+      acc += Math.min(250, now - last); last = now;
+      const STEP = 1000 / 120;
+      while (acc >= STEP && state === 'run') {
+        acc -= STEP;
+        const ev = Core.update(g, STEP / 1000);
+        if (ev.length) handle(ev);
+      }
+      if (state === 'run') hud();
+    }
+    draw(now);
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- Input ----------
+  function steer(d) {
+    if (state === 'ready') run();
+    if (state === 'run') Core.steer(g, d);
+  }
+  const KEYS = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (KEYS[e.code]) { e.preventDefault(); steer(KEYS[e.code]); }
+    else if (e.code === 'Space' || e.code === 'KeyP') {
+      if (state === 'run' || state === 'pause') { e.preventDefault(); togglePause(); }
+      else if (e.code === 'Space') e.preventDefault();
+    } else if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      e.preventDefault();
+      if (state !== 'run' && !e.repeat) go();
+    }
+  });
+  $('go').addEventListener('click', () => { if (state === 'pause') togglePause(); else go(); });
+  document.querySelectorAll('.pad button').forEach(b => b.addEventListener('pointerdown', e => { e.preventDefault(); steer(b.dataset.d); }));
+  let t0 = null;
+  cv.addEventListener('pointerdown', e => { t0 = [e.clientX, e.clientY]; });
+  cv.addEventListener('pointerup', e => {
+    if (!t0) return;
+    const dx = e.clientX - t0[0], dy = e.clientY - t0[1]; t0 = null;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return;
+    steer(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  });
+  addEventListener('blur', () => { if (state === 'run') togglePause(); });
+
+  newGame();
+  resize();
+  addEventListener('resize', resize);
+  $('go').focus();
+  requestAnimationFrame(loop);
+})();
+</script>

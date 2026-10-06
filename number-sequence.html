@@ -1,0 +1,396 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Sequence</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: sequence tiles on top, timer bar, answer row, feedback line. Overlay covers the panel between games. */
+  :root { --accent: #7cc7ff; }
+  h1 { color: var(--accent); }
+  .meta {
+    display: flex; justify-content: space-between; margin-bottom: 14px;
+    font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .seq { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .tile {
+    min-width: 64px; padding: 12px 10px; text-align: center;
+    background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    font: 600 1.35rem var(--mono); font-variant-numeric: tabular-nums;
+  }
+  .tile.blank { color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent); }
+  .tile.good { color: var(--good); box-shadow: inset 0 0 0 2px var(--good); }
+  .tile.bad { color: var(--danger); box-shadow: inset 0 0 0 2px var(--danger); }
+  .bar { height: 6px; margin: 18px 0; background: var(--ground); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 100%; background: var(--accent); }
+  .bar i.low { background: var(--danger); }
+  .answer { display: flex; gap: 8px; }
+  .answer input {
+    flex: 1; min-width: 0;
+    font: 600 1.3rem var(--mono); font-variant-numeric: tabular-nums;
+    color: var(--ink); background: var(--ground);
+    border: 0; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid);
+    padding: 10px 12px;
+  }
+  .answer input::placeholder { color: var(--muted); }
+  .fb { min-height: 3em; margin: 12px 0 0; line-height: 1.5; font-size: 0.88rem; color: var(--muted); }
+  .fb.good { color: var(--good); }
+  .fb.bad { color: var(--danger); }
+  .fb b { color: var(--ink); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+</style>
+
+<div class="cab">
+  <h1>Sequence</h1>
+  <p class="rule">Each puzzle shows five numbers that follow a hidden rule. Figure out the rule and type the number that comes next before time runs out.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Lives</span><span class="v" id="lives" aria-label="3 lives">♥♥♥</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="meta"><span id="lvl">Level 1</span><span id="clock">30s</span></div>
+    <div class="seq" id="seq" role="group" aria-label="Number sequence"></div>
+    <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+    <div class="answer">
+      <label for="ans" class="sr">Your answer: the next number in the sequence</label>
+      <input id="ans" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="Type the next number" aria-describedby="seq">
+      <button id="check" type="button">Check answer</button>
+      <button id="next" type="button" hidden>Next puzzle</button>
+    </div>
+    <p class="fb" id="fb" aria-live="polite"></p>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Type the next number in each sequence and press Enter. You have 30 seconds for each puzzle, and the game ends after three mistakes.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="keys">Type your answer, using <kbd>-</kbd> for negative numbers, and press <kbd>Enter</kbd> to check it or to move on to the next puzzle. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+// GEN-START
+// Puzzle generator. Pure: takes a random source, returns { terms: [6 ints], why }.
+// The first five terms are shown; the sixth is the answer.
+const PRIMES = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113];
+const LIMIT = 100000;
+
+function makeGen(rand) {
+  const int = (a, b) => a + Math.floor(rand() * (b - a + 1));
+  const run = (n, f) => Array.from({ length: n }, (_, i) => f(i));
+  const iterate = (s, f) => { const t = [s]; for (let i = 1; i < 6; i++) t.push(f(t[i - 1], i - 1)); return t; };
+  const upDown = n => (n < 0 ? `down by ${-n}` : `up by ${n}`);
+  const plus = c => (c > 0 ? `, with ${c} added to each` : c < 0 ? `, with ${-c} subtracted from each` : '');
+
+  const FAMILIES = [
+    { name: 'arithmetic', min: 1, make(lv) {
+      const d = int(2, 4 + lv) * (lv >= 3 && rand() < 0.4 ? -1 : 1);
+      const s = int(1, 10 + lv * 5) + (d < 0 ? 6 * -d : 0);
+      return { terms: run(6, i => s + d * i), why: d > 0 ? `Each number is ${d} more than the one before it.` : `Each number is ${-d} less than the one before it.` };
+    } },
+    { name: 'geometric', min: 2, make(lv) {
+      const r = lv < 5 ? int(2, 3) : int(2, 5), s = int(1, lv < 5 ? 5 : 9);
+      return { terms: run(6, i => s * r ** i), why: `Each number is ${r} times the one before it.` };
+    } },
+    { name: 'growing gap', min: 2, make(lv) {
+      const d0 = int(1, 5), k = int(1, lv < 5 ? 2 : 4);
+      return { terms: iterate(int(1, 20), (x, i) => x + d0 + k * i),
+        why: `The gaps between the numbers grow by ${k} each time: +${d0}, +${d0 + k}, +${d0 + 2 * k}, +${d0 + 3 * k}, so the next gap is +${d0 + 4 * k}.` };
+    } },
+    { name: 'triangular', min: 3, make() {
+      const n0 = int(1, 6);
+      return { terms: run(6, i => (n0 + i) * (n0 + i + 1) / 2),
+        why: `These are triangular numbers, where the gaps grow by 1 each time: +${n0 + 1}, +${n0 + 2}, +${n0 + 3}, +${n0 + 4}, so the next gap is +${n0 + 5}.` };
+    } },
+    { name: 'squares', min: 3, make(lv) {
+      const n0 = int(1, 8), c = lv < 4 ? 0 : int(-5, 10);
+      return { terms: run(6, i => (n0 + i) ** 2 + c), why: `These are the square numbers ${n0}², ${n0 + 1}², ${n0 + 2}², and so on${plus(c)}.` };
+    } },
+    { name: 'alternating', min: 4, make(lv) {
+      const a = int(1, 6);
+      if (rand() < 0.5) {
+        const b = lv < 7 ? 2 : int(2, 3), addFirst = rand() < 0.5;
+        const ops = [x => x + a, x => x * b];
+        if (!addFirst) ops.reverse();
+        return { terms: iterate(int(1, 6), (x, i) => ops[i % 2](x)),
+          why: addFirst ? `The steps take turns: add ${a}, then multiply by ${b}, then add ${a} again, and so on.` : `The steps take turns: multiply by ${b}, then add ${a}, then multiply by ${b} again, and so on.` };
+      }
+      const up = int(4, 9), down = int(1, up - 1);
+      return { terms: iterate(int(1, 20), (x, i) => (i % 2 ? x - down : x + up)),
+        why: `The steps take turns: add ${up}, then subtract ${down}, then add ${up} again, and so on.` };
+    } },
+    { name: 'fibonacci', min: 4, make() {
+      const t = [int(1, 6), int(1, 9)];
+      while (t.length < 6) t.push(t[t.length - 1] + t[t.length - 2]);
+      return { terms: t, why: 'Each number is the sum of the two numbers before it.' };
+    } },
+    { name: 'pronic', min: 5, make() {
+      const n0 = int(1, 9), sign = rand() < 0.5 ? 1 : -1;
+      return { terms: run(6, i => (n0 + i) ** 2 + sign * (n0 + i)),
+        why: (m => `Each number is the product of two numbers in a row: ${m}×${m + 1}, ${m + 1}×${m + 2}, ${m + 2}×${m + 3}, and so on.`)(sign > 0 ? n0 : n0 - 1) };
+    } },
+    { name: 'cubes', min: 5, make() {
+      const n0 = int(1, 5), c = int(-3, 5);
+      return { terms: run(6, i => (n0 + i) ** 3 + c), why: `These are the cube numbers ${n0}³, ${n0 + 1}³, ${n0 + 2}³, and so on${plus(c)}.` };
+    } },
+    { name: 'interleaved', min: 5, make() {
+      const p = int(1, 6), q = int(1, 6) * (rand() < 0.5 ? -1 : 1);
+      const a0 = int(1, 20), b0 = int(30, 60);
+      return { terms: run(6, i => (i % 2 ? b0 + q * ((i - 1) / 2) : a0 + p * (i / 2))),
+        why: `Two sequences take turns. The 1st, 3rd, and 5th numbers go ${upDown(p)} each time, while the 2nd, 4th, and 6th numbers go ${upDown(q)} each time.` };
+    } },
+    { name: 'primes', min: 6, make() {
+      const k = int(0, 12), c = rand() < 0.4 ? 0 : int(-1, 10);
+      return { terms: run(6, i => PRIMES[k + i] + c), why: `These are the prime numbers ${PRIMES[k]}, ${PRIMES[k + 1]}, ${PRIMES[k + 2]}, and so on${plus(c)}.` };
+    } },
+    { name: 'double-and-shift', min: 6, make() {
+      const m = rand() < 0.7 ? 2 : 3;
+      let c = int(-3, 3) || 1;
+      const s = int(Math.abs(c) + 1, 9);
+      return { terms: iterate(s, x => m * x + c),
+        why: `To get each number, ${m === 2 ? 'double' : 'triple'} the one before it and then ${c > 0 ? 'add' : 'subtract'} ${Math.abs(c)}.` };
+    } },
+    { name: 'multiplying gap', min: 7, make() {
+      const d0 = int(1, 4), r = rand() < 0.6 ? 2 : 3;
+      return { terms: iterate(int(1, 20), (x, i) => x + d0 * r ** i),
+        why: `The gap between the numbers ${r === 2 ? 'doubles' : 'triples'} each time: +${d0}, +${d0 * r}, +${d0 * r ** 2}, +${d0 * r ** 3}, so the next gap is +${d0 * r ** 4}.` };
+    } },
+  ];
+
+  // A puzzle is ambiguous if a simpler rule fits the five shown terms but predicts a different answer.
+  function ambiguous(t) {
+    const shown = t.slice(0, 5), ans = t[5];
+    if (new Set(shown).size < 3) return true;
+    const d = shown.slice(1).map((x, i) => x - shown[i]);
+    if (d.every(x => x === d[0]) && shown[4] + d[0] !== ans) return true;
+    const dd = d.slice(1).map((x, i) => x - d[i]);
+    if (dd.every(x => x === dd[0]) && shown[4] + d[3] + dd[0] !== ans) return true;
+    if (shown.every(x => x !== 0)) {
+      const r = shown[1] / shown[0];
+      if (shown.every((x, i) => !i || x === shown[i - 1] * r) && shown[4] * r !== ans) return true;
+    }
+    if (shown.every((x, i) => i < 2 || x === shown[i - 1] + shown[i - 2]) && shown[3] + shown[4] !== ans) return true;
+    return false;
+  }
+
+  const valid = t => t.length === 6 && t.every(x => Number.isInteger(x) && Math.abs(x) < LIMIT) && !ambiguous(t);
+
+  // Newest families for this level are weighted up so the difficulty is felt.
+  function make(level, prev) {
+    const open = FAMILIES.filter(f => f.min <= level);
+    const pool = open.length > 1 ? open.filter(f => f.name !== prev) : open;
+    const weights = pool.map(f => (f.min >= level - 1 ? 3 : 1));
+    for (;;) {
+      let r = rand() * weights.reduce((a, b) => a + b, 0), i = 0;
+      while ((r -= weights[i]) > 0) i++;
+      const f = pool[i], p = f.make(level);
+      if (valid(p.terms)) return { ...p, family: f.name };
+    }
+  }
+
+  return { FAMILIES, make, ambiguous, valid };
+}
+// GEN-END
+
+(() => {
+  const TIME = 30, LIVES = 3, BEST_KEY = 'sequenceBest';
+  const $ = id => document.getElementById(id);
+  const gen = makeGen(Math.random);
+  const s = { state: 'ready', score: 0, level: 1, lives: LIVES, left: TIME, last: 0, p: null, correct: 0 };
+
+  $('best').textContent = Arcade.best(BEST_KEY);
+
+  // Daily mode (?daily): five puzzles from the daily rng, levels 1 to 5, no lives, all five are played.
+  // The regular best is never touched.
+  const DAILY_COUNT = 5;
+  const daily = Arcade.daily('sequence');
+  const dailyPuzzles = [];
+  if (daily) {
+    const dgen = makeGen(daily.rng);
+    for (let lv = 1; lv <= DAILY_COUNT; lv++) dailyPuzzles.push(dgen.make(lv, dailyPuzzles.length ? dailyPuzzles[lv - 2].family : undefined));
+  }
+  const dailySummary = r => `You solved ${r.correct} of ${r.total} puzzles and scored ${r.score.toLocaleString('en-US')} ${r.score === 1 ? 'point' : 'points'} today.`;
+  function proceed() {
+    if (daily && daily.result) location.href = 'number-sequence.html';
+    else start();
+  }
+
+  function hud() {
+    $('score').textContent = s.score;
+    if (daily) {
+      $('lives').textContent = `${s.level} of ${DAILY_COUNT}`;
+      $('lives').setAttribute('aria-label', `Puzzle ${s.level} of ${DAILY_COUNT}`);
+      $('best').textContent = s.correct;
+    } else {
+      $('lives').textContent = '♥'.repeat(s.lives) + '♡'.repeat(LIVES - s.lives);
+      $('lives').setAttribute('aria-label', `${s.lives} ${s.lives === 1 ? 'life' : 'lives'}`);
+    }
+    $('lvl').textContent = `Level ${s.level}`;
+  }
+
+  function render(answerClass) {
+    const seq = $('seq');
+    seq.replaceChildren(...s.p.terms.map((t, i) => {
+      const el = document.createElement('span');
+      el.className = 'tile';
+      if (i < 5) el.textContent = t;
+      else if (answerClass) { el.textContent = t; el.classList.add(answerClass); }
+      else { el.textContent = '?'; el.classList.add('blank'); }
+      return el;
+    }));
+    seq.setAttribute('aria-label', `The sequence is ${s.p.terms.slice(0, 5).join(', ')}. What comes next?`);
+  }
+
+  function ask() {
+    s.p = daily ? dailyPuzzles[s.level - 1] : gen.make(s.level, s.p && s.p.family);
+    s.state = 'ask'; s.left = TIME; s.last = performance.now();
+    render();
+    hud();
+    const ans = $('ans');
+    ans.value = ''; ans.readOnly = false;
+    $('check').hidden = false; $('next').hidden = true;
+    ans.focus();
+  }
+
+  function start() {
+    Object.assign(s, { score: 0, level: 1, lives: LIVES, p: null, correct: 0 });
+    $('fb').textContent = ''; $('fb').className = 'fb';
+    $('ov').hidden = true;
+    ask();
+  }
+
+  function reveal(msg) {
+    s.state = 'reveal';
+    if (!daily) s.lives--;
+    hud();
+    render('bad');
+    const fb = $('fb');
+    fb.className = 'fb bad';
+    fb.innerHTML = `${msg} The answer was <b>${s.p.terms[5]}</b>. `;
+    fb.append(s.p.why);
+    $('ans').readOnly = true;
+    $('check').hidden = true;
+    $('next').hidden = false;
+    $('next').textContent = (daily ? s.level < DAILY_COUNT : s.lives) ? 'Next puzzle' : 'See your score';
+    $('next').focus();
+  }
+
+  function check() {
+    const raw = $('ans').value.trim();
+    if (!/^-?\d+$/.test(raw)) {
+      $('fb').className = 'fb'; $('fb').textContent = 'Please type a whole number first.';
+      $('ans').focus();
+      return;
+    }
+    if (Number(raw) !== s.p.terms[5]) return reveal('Not quite.');
+    const pts = s.level * 10 + Math.ceil(s.left);
+    s.score += pts;
+    $('fb').className = 'fb good';
+    $('fb').textContent = `Correct! +${pts} points. ${s.p.why}`;
+    if (daily) {
+      s.correct++;
+      if (s.level >= DAILY_COUNT) return endDaily();
+    }
+    s.level++;
+    ask();
+  }
+
+  function endDaily() {
+    s.state = 'over';
+    hud();
+    const r = { score: s.score, correct: s.correct, total: DAILY_COUNT };
+    daily.finish(r);
+    daily.result = r;
+    $('ans').readOnly = true;
+    $('ovt').textContent = 'Daily puzzles complete';
+    $('ovp').textContent = `${dailySummary(r)} Come back tomorrow for a new set of puzzles.`;
+    $('go').textContent = 'Play the regular game';
+    $('ov').hidden = false;
+    $('go').focus();
+  }
+
+  function advance() {
+    if (daily) {
+      if (s.level >= DAILY_COUNT) return endDaily();
+      s.level++;
+      return ask();
+    }
+    if (s.lives > 0) return ask();
+    s.state = 'over';
+    const best = Arcade.record(BEST_KEY, s.score);
+    $('best').textContent = best;
+    $('ovt').textContent = 'Game over';
+    $('ovp').textContent = `You scored ${s.score} ${s.score === 1 ? 'point' : 'points'} and reached level ${s.level}.${s.score >= best && s.score ? ' That’s a new best!' : ''}`;
+    $('go').textContent = 'Play again';
+    $('ov').hidden = false;
+    $('go').focus();
+  }
+
+  // Timer runs only while a puzzle is open; rAF pauses in background tabs and dt is clamped.
+  function loop(now) {
+    if (s.state === 'ask') {
+      s.left -= Math.min(0.1, (now - s.last) / 1000);
+      if (s.left <= 0) { s.left = 0; reveal(`Time’s up.`); }
+    }
+    s.last = now;
+    const left = s.state === 'ask' || s.state === 'reveal' ? s.left : TIME;
+    $('bar').style.width = `${(left / TIME) * 100}%`;
+    $('bar').classList.toggle('low', left < 8);
+    $('clock').textContent = `${Math.ceil(left)}s`;
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Keep only digits and a leading minus.
+  $('ans').addEventListener('input', e => {
+    const v = e.target.value, neg = v.trim().startsWith('-');
+    const clean = (neg ? '-' : '') + v.replace(/\D/g, '');
+    if (clean !== v) e.target.value = clean;
+  });
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key === 'Enter') {
+      if (e.repeat || e.target.closest('a')) return;
+      e.preventDefault();
+      if (s.state === 'ready' || s.state === 'over') proceed();
+      else if (s.state === 'ask') check();
+      else if (s.state === 'reveal') advance();
+    } else if (s.state === 'ask' && /^[-0-9]$/.test(e.key) && document.activeElement !== $('ans')) {
+      $('ans').focus();
+    }
+  });
+  $('go').addEventListener('click', proceed);
+  $('check').addEventListener('click', check);
+  $('next').addEventListener('click', advance);
+
+  if (daily) {
+    const when = new Date(`${daily.date}T00:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    document.title = 'Daily Sequence';
+    document.querySelector('h1').textContent = 'Daily Sequence';
+    document.querySelector('.rule').textContent = `This is the daily puzzle set for ${when}. Solve five sequences that get harder as you go, typing each next number before time runs out.`;
+    $('best').previousElementSibling.textContent = 'Correct';
+    $('lives').previousElementSibling.textContent = 'Puzzle';
+    if (daily.result) {
+      Object.assign(s, { score: daily.result.score, correct: daily.result.correct, level: DAILY_COUNT });
+      $('ovt').textContent = 'Already played today';
+      $('ovp').textContent = `${dailySummary(daily.result)} Come back tomorrow for a new set of puzzles.`;
+      $('go').textContent = 'Play the regular game';
+    } else {
+      $('ovp').textContent = 'Everyone gets the same five puzzles today. Type the next number in each sequence and press Enter. You have 30 seconds for each one, and you play all five even if you miss some.';
+    }
+  }
+
+  hud();
+  s.p = { terms: [1, 2, 3, 4, 5, 6] };
+  render();
+  $('go').focus();
+})();
+</script>

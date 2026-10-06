@@ -1,0 +1,291 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shadow Snake</title>
+<style>
+  /* Layout: single-column arcade cabinet, HUD above board, controls below. Single dark theme by choice. */
+  :root {
+    color-scheme: dark;
+    --ground: #0d1f2a;
+    --board: #122c3a;
+    --grid: #183847;
+    --ink: #e8f1f2;
+    --muted: #8fb0b8;
+    --snake: #ff8a5c;
+    --ghost: #b9a7ff;
+    --food: #ffd166;
+    --danger: #ff5c7a;
+    --display: "Bungee", "Arial Black", Impact, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+  }
+  html, body { height: 100%; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    padding-inline: 16px;
+    padding-block: 20px;
+    box-sizing: border-box;
+  }
+  .cab { max-width: 520px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+  h1 {
+    font-family: var(--display);
+    font-weight: 400;
+    font-size: clamp(1.8rem, 7vw, 2.6rem);
+    margin: 0;
+    line-height: 1;
+    letter-spacing: 0.02em;
+    text-wrap: balance;
+  }
+  h1 .sh { color: var(--ghost); }
+  h1 .sn { color: var(--snake); }
+  .rule { margin: 0; color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+  .hud { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat .k { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); }
+  .stat .v { font-size: 1.3rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #ghostv { color: var(--ghost); }
+  .stage { position: relative; width: 100%; aspect-ratio: 1; max-width: 100%; }
+  canvas {
+    width: 100%; height: 100%; display: block;
+    border-radius: 6px;
+    box-shadow: 0 0 0 2px var(--grid), 0 18px 40px -20px #000;
+    touch-action: none;
+  }
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    background: color-mix(in srgb, var(--ground) 78%, transparent);
+    border-radius: 6px; text-align: center; padding: 16px;
+  }
+  .overlay[hidden] { display: none; }
+  .overlay h2 { font-family: var(--display); font-weight: 400; margin: 0; font-size: 1.6rem; }
+  .overlay p { margin: 0; color: var(--muted); max-width: 32ch; line-height: 1.5; }
+  button {
+    font: 600 0.95rem var(--mono);
+    color: var(--ground); background: var(--snake);
+    border: 0; border-radius: 4px; padding: 10px 18px; cursor: pointer;
+  }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  .pad { display: none; grid-template-columns: repeat(3, 56px); grid-template-rows: repeat(2, 56px); gap: 6px; justify-content: center; }
+  .pad button { background: var(--board); color: var(--ink); padding: 0; font-size: 1.2rem; box-shadow: inset 0 0 0 1px var(--grid); }
+  .pad .up { grid-column: 2; }
+  .pad .left { grid-column: 1; grid-row: 2; }
+  .pad .down { grid-column: 2; grid-row: 2; }
+  .pad .right { grid-column: 3; grid-row: 2; }
+  @media (pointer: coarse) { .pad { display: grid; } }
+  .keys { color: var(--muted); font-size: 0.75rem; margin: 0; }
+  kbd { font-family: var(--mono); border: 1px solid var(--grid); border-radius: 3px; padding: 0 4px; color: var(--ink); }
+</style>
+
+<div class="cab">
+  <h1><span class="sh">Shadow</span> <span class="sn">Snake</span></h1>
+  <p class="rule">Eat the gold to grow. Five seconds after you start, a ghost of your snake begins replaying your path, so avoid the walls, your own tail, and your past self.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Ghost arrives in</span><span class="v" id="ghostv">5.0 s</span></div>
+  </div>
+
+  <div class="stage">
+    <canvas id="c" width="600" height="600" aria-label="Shadow Snake game board"></canvas>
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Steer with the arrow keys or WASD, or swipe on a touchscreen. Press Space whenever you need a break.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <div class="pad" aria-label="Direction buttons">
+    <button class="up" data-d="up" type="button" aria-label="Move up">▲</button>
+    <button class="left" data-d="left" type="button" aria-label="Move left">◀</button>
+    <button class="down" data-d="down" type="button" aria-label="Move down">▼</button>
+    <button class="right" data-d="right" type="button" aria-label="Move right">▶</button>
+  </div>
+  <p class="keys">Steer with the arrow keys or <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, and press <kbd>Space</kbd> or <kbd>P</kbd> to pause. Press <kbd>Enter</kbd> to start a new game. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <p class="keys"><a class="back" href="index.html" style="color: var(--muted)">← Back to all games</a></p>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const N = 24;                 // grid cells per side
+  const GHOST_DELAY = 45;       // ticks before your past self appears
+  const START_MS = 120, MIN_MS = 65;
+  const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+  const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
+
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  const $ = id => document.getElementById(id);
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const C = { board: css('--board'), grid: css('--grid'), snake: css('--snake'), ghost: css('--ghost'), food: css('--food'), danger: css('--danger') };
+
+  let best = 0;
+  try { best = +localStorage.getItem('shadowSnakeBest') || 0; } catch {}
+  $('best').textContent = best;
+
+  let s; // game state
+  function reset() {
+    const mid = N / 2 | 0;
+    s = {
+      snake: [[mid, mid], [mid - 1, mid], [mid - 2, mid]],
+      dir: 'right', queue: [], history: [], ghost: null,
+      food: null, score: 0, tick: 0, ms: START_MS,
+      state: 'ready', acc: 0, last: 0, dead: null,
+    };
+    s.food = spawn();
+  }
+
+  function occupied(x, y) {
+    return s.snake.some(p => p[0] === x && p[1] === y) ||
+      (s.ghost && s.ghost.some(p => p[0] === x && p[1] === y));
+  }
+  function spawn() {
+    let x, y, tries = 0;
+    do { x = Math.random() * N | 0; y = Math.random() * N | 0; } while (occupied(x, y) && ++tries < 999);
+    return [x, y];
+  }
+
+  function turn(d) {
+    const lastDir = s.queue.length ? s.queue[s.queue.length - 1] : s.dir;
+    if (d !== lastDir && d !== OPP[lastDir] && s.queue.length < 3) s.queue.push(d);
+  }
+
+  function step() {
+    if (s.queue.length) s.dir = s.queue.shift();
+    const [dx, dy] = DIRS[s.dir];
+    const head = [s.snake[0][0] + dx, s.snake[0][1] + dy];
+    const eating = head[0] === s.food[0] && head[1] === s.food[1];
+    const body = eating ? s.snake : s.snake.slice(0, -1);
+
+    if (head[0] < 0 || head[1] < 0 || head[0] >= N || head[1] >= N) return die('You hit the wall.', head);
+    if (body.some(p => p[0] === head[0] && p[1] === head[1])) return die('You bit your own tail.', head);
+    if (s.ghost && s.ghost.some(p => p[0] === head[0] && p[1] === head[1])) return die('Your past caught up with you.', head);
+
+    s.snake = [head, ...body];
+    s.history.push(s.snake.map(p => [p[0], p[1]]));
+    if (s.history.length > GHOST_DELAY) s.ghost = s.history.shift();
+    s.tick++;
+
+    if (eating) {
+      s.score++;
+      s.ms = Math.max(MIN_MS, START_MS - s.score * 2.5);
+      s.food = spawn();
+    }
+    $('score').textContent = s.score;
+  }
+
+  function die(msg, at) {
+    s.state = 'over'; s.dead = at;
+    const isNewBest = s.score > best;
+    if (s.score > best) {
+      best = s.score; $('best').textContent = best;
+      try { localStorage.setItem('shadowSnakeBest', best); } catch {}
+    }
+    const pts = s.score === 1 ? '1 point' : `${s.score} points`;
+    showOverlay('Game over', `${msg} You scored ${pts}. ${isNewBest ? 'That’s a new best!' : (best ? `Your best is ${best}.` : '')}`, 'Play again');
+  }
+
+  function showOverlay(t, p, b) { $('ovt').textContent = t; $('ovp').textContent = p; $('go').textContent = b; $('ov').hidden = false; $('go').focus(); }
+
+  function start() {
+    if (s.state === 'over') reset();
+    s.state = 'run'; s.last = performance.now(); s.acc = 0;
+    $('ov').hidden = true; $('score').textContent = s.score;
+  }
+  function togglePause() {
+    if (s.state === 'run') { s.state = 'pause'; showOverlay('Paused', 'Take your time. Your ghost is waiting for you, too.', 'Resume'); }
+    else if (s.state === 'pause') start();
+  }
+
+  function cell(x, y, color, inset = 2, r = 4) {
+    const sz = cv.width / N;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x * sz + inset, y * sz + inset, sz - inset * 2, sz - inset * 2, r);
+    ctx.fill();
+  }
+
+  function draw(now) {
+    const sz = cv.width / N;
+    ctx.fillStyle = C.board; ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.strokeStyle = C.grid; ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = 1; i < N; i++) { ctx.moveTo(i * sz, 0); ctx.lineTo(i * sz, cv.height); ctx.moveTo(0, i * sz); ctx.lineTo(cv.width, i * sz); }
+    ctx.stroke();
+
+    // food pulses gently
+    const pulse = 1 + Math.sin(now / 180) * 0.6;
+    cell(s.food[0], s.food[1], C.food, 4 - pulse, 8);
+
+    if (s.ghost) {
+      ctx.globalAlpha = 0.45;
+      s.ghost.forEach((p, i) => cell(p[0], p[1], C.ghost, i ? 4 : 3, 5));
+      ctx.globalAlpha = 1;
+    }
+    s.snake.forEach((p, i) => cell(p[0], p[1], C.snake, i ? 2 : 1, i ? 4 : 6));
+
+    // eyes on head
+    const [hx, hy] = s.snake[0], [dx, dy] = DIRS[s.dir];
+    ctx.fillStyle = C.board;
+    const cx = hx * sz + sz / 2 + dx * sz * 0.18, cy = hy * sz + sz / 2 + dy * sz * 0.18;
+    const ox = dy * sz * 0.17, oy = dx * sz * 0.17;
+    [[1], [-1]].forEach(([k]) => { ctx.beginPath(); ctx.arc(cx + ox * k, cy + oy * k, sz * 0.08, 0, 7); ctx.fill(); });
+
+    if (s.dead) {
+      const x = Math.min(N - 1, Math.max(0, s.dead[0])), y = Math.min(N - 1, Math.max(0, s.dead[1]));
+      ctx.strokeStyle = C.danger; ctx.lineWidth = 3;
+      ctx.strokeRect(x * sz + 1.5, y * sz + 1.5, sz - 3, sz - 3);
+    }
+
+    const left = Math.max(0, GHOST_DELAY - s.history.length - (s.ghost ? GHOST_DELAY : 0));
+    $('ghostv').previousElementSibling.textContent = s.ghost ? 'Ghost' : 'Ghost arrives in';
+    $('ghostv').textContent = s.ghost ? 'Active' : (left * s.ms / 1000).toFixed(1) + ' s';
+  }
+
+  function loop(now) {
+    if (s.state === 'run') {
+      s.acc += now - s.last; s.last = now;
+      while (s.acc >= s.ms && s.state === 'run') { s.acc -= s.ms; step(); }
+    }
+    draw(now);
+    requestAnimationFrame(loop);
+  }
+
+  const KEYS = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
+  addEventListener('keydown', e => {
+    if (KEYS[e.code]) {
+      e.preventDefault();
+      if (s.state === 'ready') start();
+      if (s.state === 'run') turn(KEYS[e.code]);
+    } else if (e.code === 'Space' || e.code === 'KeyP') {
+      e.preventDefault();
+      if (s.state === 'run' || s.state === 'pause') togglePause();
+    } else if (e.code === 'Enter' && s.state !== 'run') {
+      e.preventDefault(); start();
+    }
+  });
+  $('go').addEventListener('click', start);
+  document.querySelectorAll('.pad button').forEach(b => b.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (s.state === 'ready') start();
+    if (s.state === 'run') turn(b.dataset.d);
+  }));
+
+  let t0 = null;
+  cv.addEventListener('pointerdown', e => { t0 = [e.clientX, e.clientY]; });
+  cv.addEventListener('pointerup', e => {
+    if (!t0) return;
+    const dx = e.clientX - t0[0], dy = e.clientY - t0[1]; t0 = null;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 20) return;
+    if (s.state === 'ready') start();
+    if (s.state === 'run') turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  });
+
+  reset();
+  $('go').focus();
+  requestAnimationFrame(loop);
+})();
+</script>

@@ -1,0 +1,1366 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Commit Rescue</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: goal (or lesson) box, then commit graph beside a status panel, then a terminal. */
+  :root { --accent: #f78c6c; --lane3: #7cc7ff; }
+  .cab { max-width: 860px; }
+  h1 { color: var(--accent); }
+  .goal { margin-bottom: 14px; padding: 12px 14px; background: var(--ground); border-radius: 4px; box-shadow: inset 3px 0 0 var(--accent); }
+  .goal h2 { margin: 0 0 6px; font: 600 0.95rem var(--mono); color: var(--accent); }
+  .goal p { margin: 0; line-height: 1.55; font-size: 0.86rem; }
+  .goal p + p { margin-top: 8px; }
+  .goal.done { box-shadow: inset 3px 0 0 var(--good); }
+  .goal.done h2 { color: var(--good); }
+  .goal .row { margin-top: 12px; }
+  .goal code, .lesson code { color: var(--food); }
+  .view { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 12px; margin-bottom: 14px; }
+  @media (max-width: 640px) { .view { grid-template-columns: 1fr; } }
+  .graph { background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); overflow: auto; max-height: 330px; min-height: 120px; }
+  .graph svg { display: block; }
+  .graph text { font-family: var(--mono); font-size: 12px; }
+  .graph .hash { fill: var(--food); }
+  .graph .msg { fill: var(--ink); }
+  .graph .lostt { fill: var(--muted); }
+  .graph .lbl { font-size: 11px; font-weight: 600; }
+  .graph .pill { stroke-width: 1.5; fill: var(--board); }
+  .graph .p-head { fill: var(--accent); stroke: var(--accent); }
+  .graph .t-head { fill: var(--ground); }
+  .graph .p-br { stroke: var(--good); } .graph .t-br { fill: var(--good); }
+  .graph .p-tag { stroke: var(--food); } .graph .t-tag { fill: var(--food); }
+  .graph .p-rem { stroke: var(--ghost); } .graph .t-rem { fill: var(--ghost); }
+  .graph path { fill: none; stroke-width: 2.5; }
+  .graph circle { fill: var(--board); stroke-width: 2.5; }
+  .graph circle.at { fill: var(--accent); }
+  .graph .l0 { stroke: var(--accent); } .graph .l1 { stroke: var(--ghost); } .graph .l2 { stroke: var(--good); }
+  .graph .l3 { stroke: var(--lane3); } .graph .l4 { stroke: var(--food); }
+  .graph .lost { stroke: var(--muted); stroke-dasharray: 4 3; opacity: 0.75; }
+  .legend { margin: 6px 0 0; font-size: 0.7rem; color: var(--muted); line-height: 1.5; }
+  .side { font-size: 0.78rem; background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); padding: 10px 12px; }
+  .side h3 { margin: 10px 0 4px; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); font-weight: 600; }
+  .side h3:first-child { margin-top: 0; }
+  .side p, .side ul { margin: 0; padding: 0; list-style: none; line-height: 1.5; word-break: break-word; }
+  .side .st { color: var(--good); } .side .un { color: var(--danger); } .side .ut { color: var(--food); }
+  .side .none { color: var(--muted); }
+  .term { background: #08151d; border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); }
+  .out { height: 230px; overflow-y: auto; padding: 10px 12px; font-size: 0.8rem; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+  .out .c { color: var(--ink); font-weight: 600; }
+  .out .o { color: #c9dadd; }
+  .out .e { color: var(--danger); }
+  .out .i { color: var(--accent); }
+  .out .g { color: var(--good); }
+  .inrow { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--grid); border-radius: 0 0 4px 4px; }
+  .inrow:focus-within { box-shadow: inset 0 0 0 3px var(--accent); }
+  .ps { color: var(--good); font-size: 0.85rem; white-space: nowrap; }
+  #cmd { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--ink); font: 0.9rem var(--mono); padding: 4px 0; }
+  #cmd:focus { outline: none; }
+  #cmd:disabled { opacity: 0.5; }
+  .overlay p { max-width: 46ch; }
+  .ovb { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  button.ghost:focus-visible { outline-color: var(--accent); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
+  .tm { margin: 8px 0 0; font-size: 0.8rem; color: var(--muted); }
+</style>
+
+<div class="cab">
+  <h1>Commit Rescue</h1>
+  <p class="rule">Each level shows a small Git repository that is in a mess. Type real git commands to put it in the state the goal describes, and see how far through the levels you can get.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Level</span><span class="v" id="level">1</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Commands</span><span class="v" id="count">0</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="goal" id="goalbox">
+      <h2 id="gt">Level 1</h2>
+      <div id="gbody"></div>
+    </div>
+    <div class="view">
+      <div>
+        <div class="graph" id="graph"></div>
+        <p class="legend">The filled circle is the commit HEAD points at. Faded, dashed commits are not on any branch, but <code>git reflog</code> can still find them.</p>
+      </div>
+      <div class="side" aria-label="Repository status">
+        <h3>HEAD</h3><p id="sHead"></p>
+        <h3>Staged</h3><ul id="sSt"></ul>
+        <h3>Not staged</h3><ul id="sUn"></ul>
+        <h3>Untracked</h3><ul id="sUt"></ul>
+        <h3>Stash</h3><p id="sStash"></p>
+      </div>
+    </div>
+    <div class="term">
+      <div class="out" id="out" role="log" aria-label="Terminal output"></div>
+      <div class="inrow">
+        <label for="cmd" class="ps" id="ps">~/repo (main) $</label>
+        <input id="cmd" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Type a command and press Enter">
+      </div>
+    </div>
+    <p class="sr" id="live" aria-live="polite"></p>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Each level shows a Git repository that needs fixing. Type real git commands in the terminal, and type hint whenever you get stuck.</p>
+      <div class="ovb">
+        <button id="go" type="button">Start game</button>
+        <button id="fresh" type="button" class="ghost" hidden>Start from level 1</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="keys">Type commands and press <kbd>Enter</kbd> to run them. Use <kbd>↑</kbd> and <kbd>↓</kbd> to bring back earlier commands, and type <kbd>hint</kbd>, <kbd>reset-level</kbd>, or <kbd>help</kbd> at any time. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <p class="tm">Git is a trademark of Software Freedom Conservancy. This game is not affiliated with the Git project.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+// SIM-START
+// A small Git simulator: commits, branches, tags, a pretend remote, HEAD, index, working tree, stash and reflog.
+const GitSim = (() => {
+  const fnv = s => { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.codePointAt(0), 16777619); return h >>> 0; };
+  class GitError extends Error {}
+  const fail = m => { throw new GitError(m); };
+  const union = (...objs) => [...new Set(objs.flatMap(o => Object.keys(o)))].sort();
+  const sameTree = (a, b) => union(a, b).every(f => a[f] === b[f]);
+  const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+  const setOrDel = (o, f, v) => { if (v === undefined) delete o[f]; else o[f] = v; };
+  const GIT_CMDS = ['status', 'log', 'branch', 'switch', 'checkout', 'add', 'rm', 'restore', 'commit', 'reset', 'revert', 'cherry-pick', 'merge', 'rebase', 'stash', 'reflog', 'tag', 'diff', 'show', 'push'];
+  const SUPPORTED = GIT_CMDS.slice(0, -1).join(', ') + ', and push';
+  const validName = n => /^[A-Za-z0-9._\/-]+$/.test(n) && !n.startsWith('-') && !n.includes('..') && !n.endsWith('/') && !n.endsWith('.lock') && n !== 'HEAD';
+
+  function tokenize(line) {
+    const out = []; let cur = null, q = null;
+    for (const ch of line) {
+      if (q) { if (ch === q || (q === '“' && ch === '”')) q = null; else cur += ch; continue; }
+      if (ch === '"' || ch === "'" || ch === '“') { q = ch; if (cur === null) cur = ''; continue; }
+      if (/\s/.test(ch)) { if (cur !== null) { out.push(cur); cur = null; } continue; }
+      cur = (cur === null ? '' : cur) + ch;
+    }
+    if (q) fail('The command has a quote that is never closed.');
+    if (cur !== null) out.push(cur);
+    return out;
+  }
+
+  class Repo {
+    constructor(seed) {
+      Object.assign(this, { seed, n: 0, commits: {}, branches: {}, tags: {}, remote: {}, hasRemote: false,
+        head: { branch: 'main' }, detachFrom: null, index: {}, work: {}, stash: [], reflog: [], orig: null });
+    }
+    headHash() { return this.head.branch ? (this.branches[this.head.branch] || null) : this.head.hash; }
+    tree(h) { return h ? this.commits[h].tree : {}; }
+    headTree() { return this.tree(this.headHash()); }
+    where() { return this.head.branch || this.head.hash; }
+    line(h) { return `${h} ${this.commits[h].msg}`; }
+    newCommit(msg, parents, tree) {
+      let h;
+      do { h = fnv(`${this.seed}|${this.n++}|${msg}|${parents.join(',')}`).toString(16).padStart(8, '0').slice(0, 7); }
+      while (this.commits[h] || /^\d+$/.test(h));
+      this.commits[h] = { hash: h, msg, parents: [...parents], tree: { ...tree }, seq: Object.keys(this.commits).length };
+      return h;
+    }
+    log(h, msg) { this.reflog.push({ hash: h, msg }); }
+    setHead(h, msg) { if (this.head.branch) this.branches[this.head.branch] = h; else this.head.hash = h; this.log(h, msg); }
+    reach(h) {
+      const s = new Set(), st = h ? [h] : [];
+      while (st.length) { const x = st.pop(); if (s.has(x)) continue; s.add(x); st.push(...this.commits[x].parents); }
+      return s;
+    }
+    isAncestor(a, b) { return !!a && !!b && this.reach(b).has(a); }
+    tips() { return [...Object.values(this.branches), ...Object.values(this.tags), ...Object.values(this.remote)]; }
+
+    resolve(rev) {
+      const bad = () => fail(`fatal: ambiguous argument '${rev}': unknown revision or path not in the working tree.`);
+      const m = /^(.+?)((?:[~^]\d*)*)$/.exec(rev);
+      if (!m) bad();
+      const [, base, suf] = m;
+      const rl = /^(?:HEAD)?@\{(\d+)\}$/.exec(base);
+      let h;
+      if (base === 'HEAD' || base === '@') h = this.headHash();
+      else if (rl) {
+        const e = this.reflog[this.reflog.length - 1 - Number(rl[1])];
+        if (!e) fail(`fatal: log for 'HEAD' only has ${plural(this.reflog.length, 'entry', 'entries')}.`);
+        h = e.hash;
+      } else if (this.branches[base]) h = this.branches[base];
+      else if (this.tags[base]) h = this.tags[base];
+      else if (this.remote[base]) h = this.remote[base];
+      else if (base === 'ORIG_HEAD' && this.orig) h = this.orig;
+      else if (/^[0-9a-f]{4,40}$/.test(base)) {
+        const hits = Object.keys(this.commits).filter(k => k.startsWith(base));
+        if (hits.length > 1) fail(`error: short object ID ${base} is ambiguous`);
+        h = hits[0];
+      }
+      if (!h) bad();
+      for (const [, op, num] of suf.matchAll(/([~^])(\d*)/g)) {
+        const n = num === '' ? 1 : Number(num);
+        if (op === '~') { for (let i = 0; i < n; i++) { h = this.commits[h].parents[0]; if (!h) bad(); } }
+        else if (n > 0) { h = this.commits[h].parents[n - 1]; if (!h) bad(); }
+      }
+      return h;
+    }
+    isRev(rev) { try { this.resolve(rev); return true; } catch (e) { if (e instanceof GitError) return false; throw e; } }
+
+    changes() {
+      const H = this.headTree(), I = this.index, W = this.work, staged = [], unstaged = [], untracked = [];
+      for (const f of union(H, I, W)) {
+        if (I[f] !== H[f]) staged.push([f, H[f] === undefined ? 'new file' : I[f] === undefined ? 'deleted' : 'modified']);
+        if (f in I) { if (W[f] !== I[f]) unstaged.push([f, W[f] === undefined ? 'deleted' : 'modified']); }
+        else if (f in W) untracked.push(f);
+      }
+      return { staged, unstaged, untracked };
+    }
+    dirtyFiles() { const c = this.changes(); return [...new Set([...c.staged, ...c.unstaged].map(x => x[0]))].sort(); }
+    clean() { return this.dirtyFiles().length === 0; }
+    untrackedMap() { const o = {}; for (const f of this.changes().untracked) o[f] = this.work[f]; return o; }
+    // Index and working tree after moving to tree T, carrying local changes along when they don't clash.
+    carry(T) {
+      const H = this.headTree(), I = this.index, W = this.work, nI = {}, nW = {}, bad = [], badU = [];
+      for (const f of union(H, I, W, T)) {
+        if (f in I || f in H) {
+          if (I[f] !== H[f] || W[f] !== I[f]) { if (T[f] !== H[f]) bad.push(f); setOrDel(nI, f, I[f]); setOrDel(nW, f, W[f]); }
+          else { setOrDel(nI, f, T[f]); setOrDel(nW, f, T[f]); }
+        } else if (f in T) { if (f in W && W[f] !== T[f]) badU.push(f); nI[f] = T[f]; nW[f] = T[f]; }
+        else if (f in W) nW[f] = W[f];
+      }
+      return { nI, nW, bad, badU };
+    }
+    // Replace index and working tree with T, keeping untracked files.
+    hardTo(T) {
+      const keep = this.untrackedMap();
+      this.index = { ...T };
+      this.work = { ...T };
+      for (const f in keep) if (!(f in T)) this.work[f] = keep[f];
+    }
+    leavingWarning(target) {
+      if (this.head.branch) return '';
+      const kept = new Set();
+      for (const t of [...this.tips(), target]) for (const c of this.reach(t)) kept.add(c);
+      const lost = [...this.reach(this.head.hash)].filter(c => !kept.has(c)).sort((a, b) => this.commits[b].seq - this.commits[a].seq);
+      if (!lost.length) return '';
+      return `Warning: you are leaving ${plural(lost.length, 'commit')} behind, not connected to\nany of your branches:\n\n${lost.slice(0, 4).map(c => `  ${this.line(c)}`).join('\n')}\n\nIf you want to keep ${lost.length === 1 ? 'it' : 'them'} by creating a new branch, this may be a good time\nto do so with:\n\n git branch <new-branch-name> ${lost[0]}\n\n`;
+    }
+    moveTo(target, head, msg) {
+      const { nI, nW, bad, badU } = this.carry(this.tree(target));
+      if (bad.length) fail(`error: Your local changes to the following files would be overwritten by checkout:\n${bad.map(f => `\t${f}`).join('\n')}\nPlease commit your changes or stash them before you switch branches.\nAborting`);
+      if (badU.length) fail(`error: The following untracked working tree files would be overwritten by checkout:\n${badU.map(f => `\t${f}`).join('\n')}\nPlease move or remove them before you switch branches.\nAborting`);
+      const warn = this.leavingWarning(target);
+      const carried = this.dirtyFiles().map(f => `M\t${f}`).join('\n');
+      this.index = nI; this.work = nW;
+      if (!head.branch && this.head.branch) this.detachFrom = target;
+      if (!head.branch && !this.head.branch) this.detachFrom = target;
+      this.head = head;
+      this.log(target, msg);
+      return warn + (carried ? carried + '\n' : '');
+    }
+    requireClean(verb) {
+      if (!this.clean()) fail(`error: your local changes would be overwritten by ${verb}.\nhint: commit your changes or stash them to proceed.\nfatal: ${verb} failed`);
+    }
+    applyChange(cur, from, to) {
+      const tree = { ...cur }, conflicts = [];
+      for (const f of union(from, to)) {
+        if (from[f] === to[f]) continue;
+        if (cur[f] === from[f]) setOrDel(tree, f, to[f]);
+        else if (cur[f] !== to[f]) conflicts.push(f);
+      }
+      return { tree, conflicts };
+    }
+    commitTree(T, msg, reflogMsg) {
+      const H = this.headHash(), h = this.newCommit(msg, H ? [H] : [], T);
+      this.hardTo(T);
+      this.setHead(h, reflogMsg);
+      return `[${this.head.branch || 'detached HEAD'} ${h}] ${msg}`;
+    }
+    mergeBase(a, b) {
+      const ra = this.reach(a);
+      return [...this.reach(b)].filter(c => ra.has(c)).sort((x, y) => this.commits[y].seq - this.commits[x].seq)[0];
+    }
+    deco(h) {
+      const parts = [];
+      if (this.headHash() === h) parts.push(this.head.branch ? `HEAD -> ${this.head.branch}` : 'HEAD');
+      for (const [t, x] of Object.entries(this.tags).sort()) if (x === h) parts.push(`tag: ${t}`);
+      for (const [r, x] of Object.entries(this.remote).sort()) if (x === h) parts.push(r);
+      for (const [b, x] of Object.entries(this.branches).sort()) if (x === h && b !== this.head.branch) parts.push(b);
+      return parts.length ? ` (${parts.join(', ')})` : '';
+    }
+    tracking(b) {
+      const r = this.remote[`origin/${b}`], l = this.branches[b];
+      if (!r || !l) return '';
+      const rl = this.reach(l), rr = this.reach(r);
+      const ahead = [...rl].filter(c => !rr.has(c)).length, behind = [...rr].filter(c => !rl.has(c)).length;
+      if (!ahead && !behind) return `Your branch is up to date with 'origin/${b}'.`;
+      if (ahead && !behind) return `Your branch is ahead of 'origin/${b}' by ${plural(ahead, 'commit')}.\n  (use "git push" to publish your local commits)`;
+      if (!ahead) return `Your branch is behind 'origin/${b}' by ${plural(behind, 'commit')}, and can be fast-forwarded.`;
+      return `Your branch and 'origin/${b}' have diverged,\nand have ${ahead} and ${behind} different commits each, respectively.`;
+    }
+    diffText(a, b) {
+      const out = [];
+      for (const f of union(a, b)) {
+        if (a[f] === b[f]) continue;
+        const la = a[f] === undefined ? [] : a[f].split('\n'), lb = b[f] === undefined ? [] : b[f].split('\n');
+        const r = (s, n) => (n === 1 ? `${s}` : `${s},${n}`);
+        out.push(`diff --git a/${f} b/${f}`);
+        if (a[f] === undefined) out.push('new file mode 100644');
+        if (b[f] === undefined) out.push('deleted file mode 100644');
+        out.push(`--- ${a[f] === undefined ? '/dev/null' : 'a/' + f}`, `+++ ${b[f] === undefined ? '/dev/null' : 'b/' + f}`);
+        out.push(`@@ -${r(la.length ? 1 : 0, la.length)} +${r(lb.length ? 1 : 0, lb.length)} @@`);
+        let p = 0; while (p < la.length && p < lb.length && la[p] === lb[p]) p++;
+        let s = 0; while (s < la.length - p && s < lb.length - p && la[la.length - 1 - s] === lb[lb.length - 1 - s]) s++;
+        for (let i = 0; i < p; i++) out.push(' ' + la[i]);
+        for (let i = p; i < la.length - s; i++) out.push('-' + la[i]);
+        for (let i = p; i < lb.length - s; i++) out.push('+' + lb[i]);
+        for (let i = la.length - s; i < la.length; i++) out.push(' ' + la[i]);
+      }
+      return out.join('\n');
+    }
+    matchPaths(paths, pool, err) {
+      const res = new Set();
+      for (const p of paths) {
+        if (p === '.' || p === '*' || p === ':/') { pool.forEach(f => res.add(f)); continue; }
+        if (!pool.includes(p)) fail(err(p));
+        res.add(p);
+      }
+      return [...res];
+    }
+
+    // ----- commands -----
+    status(args) {
+      const short = args.includes('-s') || args.includes('--short');
+      const c = this.changes();
+      if (short) {
+        const m = { 'new file': 'A', modified: 'M', deleted: 'D' }, rows = {};
+        for (const [f, k] of c.staged) rows[f] = [m[k], ' '];
+        for (const [f, k] of c.unstaged) rows[f] = [(rows[f] || [' '])[0], m[k]];
+        return [...Object.keys(rows).sort().map(f => `${rows[f].join('')} ${f}`), ...c.untracked.map(f => `?? ${f}`)].join('\n');
+      }
+      const L = [];
+      if (this.head.branch) { L.push(`On branch ${this.head.branch}`); const t = this.tracking(this.head.branch); if (t) L.push(t); }
+      else L.push(`HEAD detached ${this.head.hash === this.detachFrom ? 'at' : 'from'} ${this.detachFrom || this.head.hash}`);
+      if (!this.headHash()) L.push('', 'No commits yet');
+      const head = L.length, sep = () => (L.length === 1 && head === 1 ? [] : ['']);
+      if (c.staged.length) L.push(...sep(), 'Changes to be committed:', '  (use "git restore --staged <file>..." to unstage)', ...c.staged.map(([f, k]) => `\t${(k + ':').padEnd(12)}${f}`));
+      if (c.unstaged.length) L.push(...sep(), 'Changes not staged for commit:', '  (use "git add <file>..." to update what will be committed)', '  (use "git restore <file>..." to discard changes in working directory)', ...c.unstaged.map(([f, k]) => `\t${(k + ':').padEnd(12)}${f}`));
+      if (c.untracked.length) L.push(...sep(), 'Untracked files:', '  (use "git add <file>..." to include in what will be committed)', ...c.untracked.map(f => `\t${f}`));
+      if (!c.staged.length && !c.unstaged.length) L.push(...sep(), c.untracked.length ? 'nothing added to commit but untracked files present (use "git add" to track)' : 'nothing to commit, working tree clean');
+      else if (!c.staged.length) L.push(...sep(), 'no changes added to commit (use "git add" and/or "git commit -a")');
+      return L.join('\n');
+    }
+    log_(args) {
+      let oneline = false, all = false, graph = false, n = Infinity; const revs = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--oneline') oneline = true;
+        else if (a === '--all') all = true;
+        else if (a === '--graph') graph = true;
+        else if (a === '--decorate') continue;
+        else if (a === '-n') n = Number(args[++i]) || 0;
+        else if (/^-\d+$/.test(a)) n = Number(a.slice(1));
+        else if (a.startsWith('--max-count=')) n = Number(a.slice(12)) || 0;
+        else if (a.startsWith('-')) fail(`fatal: unrecognized argument: ${a}`);
+        else revs.push(a);
+      }
+      if (!this.headHash() && !all && !revs.length) fail(`fatal: your current branch '${this.head.branch}' does not have any commits yet`);
+      const starts = all ? [...this.tips(), this.headHash()].filter(Boolean) : revs.length ? revs.map(r => this.resolve(r)) : [this.headHash()];
+      const set = new Set(); starts.forEach(s => this.reach(s).forEach(c => set.add(c)));
+      const list = [...set].sort((a, b) => this.commits[b].seq - this.commits[a].seq).slice(0, n);
+      const g = graph ? '* ' : '', gp = graph ? '| ' : '';
+      if (oneline) return list.map(h => `${g}${h}${this.deco(h)} ${this.commits[h].msg}`).join('\n');
+      return list.map(h => {
+        const C = this.commits[h];
+        return [`${g}commit ${h}${this.deco(h)}`, ...(C.parents.length > 1 ? [`${gp}Merge: ${C.parents.join(' ')}`] : []), gp, `${gp}    ${C.msg}`].join('\n');
+      }).join(`\n${gp}\n`);
+    }
+    show(args) {
+      const rev = args.find(a => !a.startsWith('-')) || 'HEAD', h = this.resolve(rev), C = this.commits[h];
+      const head = [`commit ${h}${this.deco(h)}`, ...(C.parents.length > 1 ? [`Merge: ${C.parents.join(' ')}`] : []), '', `    ${C.msg}`];
+      if (C.parents.length > 1) return head.join('\n');
+      const d = this.diffText(this.tree(C.parents[0]), C.tree);
+      return head.join('\n') + (d ? '\n\n' + d : '');
+    }
+    diff(args) {
+      const staged = args.includes('--staged') || args.includes('--cached');
+      const bad = args.find(a => a.startsWith('-') && a !== '--staged' && a !== '--cached');
+      if (bad) fail(`error: invalid option: ${bad}`);
+      const revs = args.filter(a => !a.startsWith('-'));
+      if (revs.length === 2) return this.diffText(this.tree(this.resolve(revs[0])), this.tree(this.resolve(revs[1])));
+      if (revs.length === 1) {
+        const tracked = {}; for (const f of union(this.index)) if (f in this.work) tracked[f] = this.work[f];
+        return this.diffText(this.tree(this.resolve(revs[0])), staged ? this.index : tracked);
+      }
+      if (staged) return this.diffText(this.headTree(), this.index);
+      const w = {}; for (const f in this.index) if (f in this.work) w[f] = this.work[f];
+      return this.diffText(this.index, w);
+    }
+    branch(args) {
+      const flags = args.filter(a => a.startsWith('-')), pos = args.filter(a => !a.startsWith('-'));
+      const known = ['-d', '-D', '--delete', '-f', '--force', '-m', '-M', '--list', '-l', '-a', '--all', '-v', '-vv', '--show-current', '-r'];
+      const unk = flags.find(f => !known.includes(f));
+      if (unk) fail(`error: unknown option '${unk.replace(/^-+/, '')}'`);
+      const has = (...f) => f.some(x => flags.includes(x));
+      if (has('--show-current')) return this.head.branch || '';
+      if (has('-d', '-D', '--delete')) {
+        if (!pos.length) fail('fatal: branch name required');
+        const force = has('-D') || has('-f', '--force');
+        return pos.map(b => {
+          if (!this.branches[b]) fail(`error: branch '${b}' not found.`);
+          if (b === this.head.branch) fail(`error: Cannot delete branch '${b}' checked out at '~/repo'`);
+          if (!force && !this.isAncestor(this.branches[b], this.headHash())) fail(`error: The branch '${b}' is not fully merged.\nIf you are sure you want to delete it, run 'git branch -D ${b}'.`);
+          const was = this.branches[b]; delete this.branches[b];
+          return `Deleted branch ${b} (was ${was}).`;
+        }).join('\n');
+      }
+      if (has('-m', '-M')) {
+        const [from, to] = pos.length === 1 ? [this.head.branch, pos[0]] : pos;
+        if (!from || !this.branches[from]) fail(`error: refname refs/heads/${from || 'HEAD'} not found\nfatal: Branch rename failed`);
+        if (!to || !validName(to)) fail(`fatal: '${to}' is not a valid branch name`);
+        if (this.branches[to] && !has('-M')) fail(`fatal: a branch named '${to}' already exists`);
+        const h = this.branches[from]; delete this.branches[from]; this.branches[to] = h;
+        if (this.head.branch === from) this.head = { branch: to };
+        return '';
+      }
+      if (!pos.length || has('--list', '-l')) {
+        const v = has('-v', '-vv'), L = [];
+        if (!this.head.branch) L.push(`* (HEAD detached ${this.head.hash === this.detachFrom ? 'at' : 'from'} ${this.detachFrom || this.head.hash})`);
+        const show = has('-r') ? [] : Object.keys(this.branches).sort();
+        for (const b of show) L.push(`${b === this.head.branch ? '*' : ' '} ${b}${v ? ` ${this.line(this.branches[b])}` : ''}`);
+        if (has('-a', '--all', '-r')) for (const r of Object.keys(this.remote).sort()) L.push(`  ${has('-r') ? '' : 'remotes/'}${r}`);
+        return L.join('\n');
+      }
+      const [name, start] = pos;
+      if (pos.length > 2) fail('fatal: too many arguments for a create operation');
+      if (!validName(name)) fail(`fatal: '${name}' is not a valid branch name`);
+      const force = has('-f', '--force');
+      if (this.branches[name] && !force) fail(`fatal: a branch named '${name}' already exists`);
+      if (force && name === this.head.branch) fail(`fatal: cannot force update the branch '${name}' used by worktree at '~/repo'`);
+      const h = start ? this.resolve(start) : this.headHash();
+      if (!h) fail(`fatal: not a valid object name: 'HEAD'`);
+      this.branches[name] = h;
+      return '';
+    }
+    createAndSwitch(name, start, force) {
+      if (!validName(name)) fail(`fatal: '${name}' is not a valid branch name`);
+      if (this.branches[name] && !force) fail(`fatal: a branch named '${name}' already exists`);
+      const h = start ? this.resolve(start) : this.headHash();
+      const pre = this.moveTo(h, { branch: name }, `checkout: moving from ${this.where()} to ${name}`);
+      this.branches[name] = h;
+      return pre + `Switched to a new branch '${name}'`;
+    }
+    switchBranch(name) {
+      if (name === this.head.branch) return `Already on '${name}'`;
+      const pre = this.moveTo(this.branches[name], { branch: name }, `checkout: moving from ${this.where()} to ${name}`);
+      const t = this.tracking(name);
+      return pre + `Switched to branch '${name}'` + (t ? '\n' + t : '');
+    }
+    detachAt(rev) {
+      const h = this.resolve(rev), was = this.head.branch ? null : this.head.hash;
+      const pre = this.moveTo(h, { hash: h }, `checkout: moving from ${this.where()} to ${rev}`);
+      if (was) return pre + (was !== h ? `Previous HEAD position was ${this.line(was)}\n` : '') + `HEAD is now at ${this.line(h)}`;
+      return pre + `Note: switching to '${rev}'.\n\nYou are in 'detached HEAD' state. You can look around, make experimental\nchanges and commit them, and you can discard any commits you make in this\nstate without impacting any branches by switching back to a branch.\n\nIf you want to create a new branch to retain commits you create, you may\ndo so (now or later) by using -c with the switch command. Example:\n\n  git switch -c <new-branch-name>\n\nHEAD is now at ${this.line(h)}`;
+    }
+    switch_(args) {
+      let create = null, force = false, detach = false; const pos = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '-c' || a === '--create' || a === '-C' || a === '--force-create') { create = args[++i]; force = a === '-C' || a === '--force-create'; if (!create) fail(`error: switch \`${a.replace(/^-+/, '')}' requires a value`); }
+        else if (a === '--detach' || a === '-d') detach = true;
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else pos.push(a);
+      }
+      if (create) return this.createAndSwitch(create, pos[0], force);
+      if (!pos.length) fail('fatal: missing branch or commit argument');
+      const name = pos[0];
+      if (detach) return this.detachAt(name);
+      if (!this.branches[name]) {
+        if (this.isRev(name)) fail(`fatal: a branch is expected, got commit '${name}'\nhint: If you want to detach HEAD at the commit, try again with the --detach option.`);
+        fail(`fatal: invalid reference: ${name}`);
+      }
+      return this.switchBranch(name);
+    }
+    checkout(args) {
+      const dd = args.indexOf('--');
+      if (dd >= 0) return this.restoreWork(args.slice(dd + 1));
+      let create = null, force = false; const pos = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '-b' || a === '-B') { create = args[++i]; force = a === '-B'; if (!create) fail(`error: switch \`${a[1]}' requires a value`); }
+        else if (a === '--detach') { const r = args[++i] || 'HEAD'; return this.detachAt(r); }
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else pos.push(a);
+      }
+      if (create) return this.createAndSwitch(create, pos[0], force);
+      if (!pos.length) return '';
+      const x = pos[0];
+      if (pos.length === 1 && this.branches[x]) return this.switchBranch(x);
+      if (pos.length === 1 && this.isRev(x)) return this.detachAt(x);
+      return this.restoreWork(pos);
+    }
+    restoreWork(paths) {
+      const fs = this.matchPaths(paths, Object.keys(this.index).sort(), p => `error: pathspec '${p}' did not match any file(s) known to git`);
+      for (const f of fs) setOrDel(this.work, f, this.index[f]);
+      return `Updated ${plural(fs.length, 'path')} from the index`;
+    }
+    restore(args) {
+      let staged = false, worktree = false, source = null; const paths = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--staged' || a === '-S') staged = true;
+        else if (a === '--worktree' || a === '-W') worktree = true;
+        else if (a === '-SW' || a === '-WS') staged = worktree = true;
+        else if (a === '--source' || a === '-s') source = args[++i];
+        else if (a.startsWith('--source=')) source = a.slice(9);
+        else if (a === '--') continue;
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else paths.push(a);
+      }
+      if (!paths.length) fail('fatal: you must specify path(s) to restore');
+      if (!staged) worktree = true;
+      const err = p => `error: pathspec '${p}' did not match any file(s) known to git`;
+      if (staged) {
+        const src = source ? this.tree(this.resolve(source)) : this.headTree();
+        const fs = this.matchPaths(paths, union(src, this.index), err);
+        for (const f of fs) { setOrDel(this.index, f, src[f]); if (worktree) setOrDel(this.work, f, src[f]); }
+        return '';
+      }
+      const src = source ? this.tree(this.resolve(source)) : this.index;
+      const fs = this.matchPaths(paths, union(this.index, src), err);
+      for (const f of fs) setOrDel(this.work, f, src[f]);
+      return '';
+    }
+    add(args) {
+      const all = args.some(a => a === '-A' || a === '--all' || a === '.' || a === '*'), upd = args.includes('-u') || args.includes('--update');
+      const bad = args.find(a => a.startsWith('-') && !['-A', '--all', '-u', '--update', '--'].includes(a));
+      if (bad) fail(`error: unknown option '${bad.replace(/^-+/, '')}'`);
+      const paths = args.filter(a => !a.startsWith('-'));
+      let fs;
+      if (all) fs = union(this.index, this.work);
+      else if (upd && !paths.length) fs = Object.keys(this.index);
+      else if (!paths.length) fail(`Nothing specified, nothing added.\nhint: Maybe you wanted to say 'git add .'?`);
+      else fs = this.matchPaths(paths, union(this.index, this.work), p => `fatal: pathspec '${p}' did not match any files`);
+      for (const f of fs) setOrDel(this.index, f, this.work[f]);
+      return '';
+    }
+    rm(args) {
+      const cached = args.includes('--cached'), paths = args.filter(a => !a.startsWith('-'));
+      if (!paths.length) fail('usage: git rm [--cached] <file>...');
+      const fs = this.matchPaths(paths, Object.keys(this.index).sort(), p => `fatal: pathspec '${p}' did not match any files`);
+      for (const f of fs) { delete this.index[f]; if (!cached) delete this.work[f]; }
+      return fs.map(f => `rm '${f}'`).join('\n');
+    }
+    commit(args) {
+      let msg = null, amend = false, all = false, noEdit = false;
+      const need = () => fail(`error: switch 'm' requires a value`);
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--amend') amend = true;
+        else if (a === '--no-edit') noEdit = true;
+        else if (a === '--all') all = true;
+        else if (a === '-m' || a === '--message') { if (i + 1 >= args.length) need(); msg = args[++i]; }
+        else if (a.startsWith('--message=')) msg = a.slice(10);
+        else if (a.startsWith('--')) fail(`error: unknown option '${a.slice(2)}'`);
+        else if (a.startsWith('-') && a.length > 1) {
+          for (let j = 1; j < a.length; j++) {
+            const ch = a[j];
+            if (ch === 'a') all = true;
+            else if (ch === 'm') { const rest = a.slice(j + 1); if (rest) msg = rest; else { if (i + 1 >= args.length) need(); msg = args[++i]; } break; }
+            else fail(`error: unknown switch '${ch}'`);
+          }
+        } else fail(`error: pathspec '${a}' did not match any file(s) known to git\nhint: If this is part of your message, put the whole message in quotes, like git commit -m "Fix the typo".`);
+      }
+      if (msg === null && !(amend && noEdit)) {
+        if (amend) fail('This simulator has no text editor. Use git commit --amend -m "new message" to change the message, or git commit --amend --no-edit to keep it.');
+        fail('This simulator has no text editor, so please give the message with -m, like git commit -m "Add login form".');
+      }
+      if (msg !== null && !msg.trim()) fail('Aborting commit due to empty commit message.');
+      if (all) for (const f of Object.keys(this.index)) setOrDel(this.index, f, this.work[f]);
+      const H = this.headHash();
+      let h;
+      if (amend) {
+        if (!H) fail('fatal: You have nothing to amend.');
+        const old = this.commits[H];
+        if (msg === null) msg = old.msg;
+        h = this.newCommit(msg, old.parents, this.index);
+        this.setHead(h, `commit (amend): ${msg}`);
+      } else {
+        if (sameTree(this.index, this.headTree())) {
+          const c = this.changes();
+          fail(`${this.head.branch ? `On branch ${this.head.branch}` : 'HEAD detached'}\n${c.unstaged.length || c.untracked.length ? 'no changes added to commit (use "git add" and/or "git commit -a")' : 'nothing to commit, working tree clean'}`);
+        }
+        h = this.newCommit(msg, H ? [H] : [], this.index);
+        this.setHead(h, H ? `commit: ${msg}` : `commit (initial): ${msg}`);
+      }
+      const C = this.commits[h], n = union(this.tree(C.parents[0]), C.tree).filter(f => this.tree(C.parents[0])[f] !== C.tree[f]).length;
+      return `[${this.head.branch || 'detached HEAD'}${C.parents.length ? '' : ' (root-commit)'} ${h}] ${msg}\n ${plural(n, 'file')} changed`;
+    }
+    reset(args) {
+      let mode = null; const pos = [], paths = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--soft' || a === '--mixed' || a === '--hard') { if (mode) fail('fatal: Only one of --soft, --mixed, or --hard is allowed.'); mode = a.slice(2); }
+        else if (a === '--') { paths.push(...args.slice(i + 1)); break; }
+        else if (a === '-q' || a === '--quiet') continue;
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else pos.push(a);
+      }
+      let rev = 'HEAD';
+      if (pos.length) {
+        if (this.isRev(pos[0])) { rev = pos[0]; paths.push(...pos.slice(1)); }
+        else if (union(this.index, this.headTree(), this.work).includes(pos[0])) paths.push(...pos);
+        else this.resolve(pos[0]);
+      }
+      const unstagedList = () => { const u = this.changes().unstaged; return u.length ? `Unstaged changes after reset:\n${u.map(([f, k]) => `${k === 'deleted' ? 'D' : 'M'}\t${f}`).join('\n')}` : ''; };
+      if (paths.length) {
+        if (mode && mode !== 'mixed') fail(`fatal: Cannot do ${mode} reset with paths.`);
+        const src = this.tree(this.resolve(rev));
+        const fs = this.matchPaths(paths, union(this.index, src, this.work), p => `fatal: ambiguous argument '${p}': unknown revision or path not in the working tree.`);
+        for (const f of fs) setOrDel(this.index, f, src[f]);
+        return unstagedList();
+      }
+      mode = mode || 'mixed';
+      const t = this.resolve(rev), T = this.tree(t);
+      if (mode === 'hard') this.hardTo(T);
+      else if (mode === 'mixed') this.index = { ...T };
+      this.orig = this.headHash();
+      this.setHead(t, `reset: moving to ${rev}`);
+      if (mode === 'hard') return `HEAD is now at ${this.line(t)}`;
+      return mode === 'mixed' ? unstagedList() : '';
+    }
+    revert(args) {
+      let mainline = 0; const pos = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '-m' || a === '--mainline') mainline = Number(args[++i]) || 0;
+        else if (a === '--no-edit') continue;
+        else if (['--continue', '--abort', '--skip', '--quit'].includes(a)) fail('error: no cherry-pick or revert in progress\nfatal: revert failed');
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else pos.push(a);
+      }
+      if (!pos.length) fail('You need to name the commit to revert, for example git revert HEAD.');
+      const out = [];
+      for (const rev of pos) {
+        const c = this.resolve(rev), C = this.commits[c];
+        this.requireClean('revert');
+        if (C.parents.length > 1 && !mainline) fail(`error: commit ${c} is a merge but no -m option was given.\nfatal: revert failed`);
+        if (C.parents.length <= 1 && mainline) fail(`error: mainline was specified but commit ${c} is not a merge.\nfatal: revert failed`);
+        if (mainline > C.parents.length) fail(`error: commit ${c} does not have parent ${mainline}\nfatal: revert failed`);
+        const parent = C.parents[(mainline || 1) - 1];
+        const { tree, conflicts } = this.applyChange(this.headTree(), C.tree, this.tree(parent));
+        if (conflicts.length) fail(`error: could not revert ${c}... ${C.msg}\nThe change conflicts with later edits to ${conflicts.join(', ')}. Merge conflicts aren’t simulated here, so nothing was changed.`);
+        if (sameTree(tree, this.headTree())) fail(`On branch ${this.where()}\nnothing to commit, working tree clean\n(The changes from ${c} are already undone.)`);
+        const msg = `Revert "${C.msg}"`;
+        out.push(this.commitTree(tree, msg, `revert: ${msg}`));
+      }
+      return out.join('\n');
+    }
+    cherryPick(args) {
+      if (args.some(a => ['--continue', '--abort', '--skip', '--quit'].includes(a))) fail('error: no cherry-pick or revert in progress\nfatal: cherry-pick failed');
+      const bad = args.find(a => a.startsWith('-'));
+      if (bad) fail(`error: unknown option '${bad.replace(/^-+/, '')}'`);
+      if (!args.length) fail('You need to name the commit to copy, for example git cherry-pick a1b2c3d.');
+      const out = [];
+      for (const rev of args) {
+        const c = this.resolve(rev), C = this.commits[c];
+        this.requireClean('cherry-pick');
+        if (C.parents.length > 1) fail(`error: commit ${c} is a merge but no -m option was given.\nfatal: cherry-pick failed`);
+        const { tree, conflicts } = this.applyChange(this.headTree(), this.tree(C.parents[0]), C.tree);
+        if (conflicts.length) fail(`error: could not apply ${c}... ${C.msg}\nThe change conflicts with ${conflicts.join(', ')} on this branch. Merge conflicts aren’t simulated here, so nothing was changed.`);
+        if (sameTree(tree, this.headTree())) fail(`The previous cherry-pick is now empty, because the changes from ${c} are already on this branch.`);
+        out.push(this.commitTree(tree, C.msg, `cherry-pick: ${C.msg}`));
+      }
+      return out.join('\n');
+    }
+    merge(args) {
+      let noff = false, ffOnly = false, msg = null; const pos = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--no-ff') noff = true;
+        else if (a === '--ff-only') ffOnly = true;
+        else if (a === '--ff') continue;
+        else if (a === '-m') msg = args[++i];
+        else if (a === '--abort' || a === '--continue') fail('fatal: There is no merge to abort (MERGE_HEAD missing).');
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else pos.push(a);
+      }
+      if (!pos.length) fail('fatal: No remote for the current branch.\n(Name the branch to merge, for example git merge feature.)');
+      const name = pos[0], t = this.resolve(name), H = this.headHash();
+      if (this.isAncestor(t, H)) return 'Already up to date.';
+      const overwrite = bad => `error: Your local changes to the following files would be overwritten by merge:\n${bad.map(f => `\t${f}`).join('\n')}\nPlease commit your changes or stash them before you merge.\nAborting`;
+      if (this.isAncestor(H, t) && !noff) {
+        const { nI, nW, bad } = this.carry(this.tree(t));
+        if (bad.length) fail(overwrite(bad));
+        this.orig = H; this.index = nI; this.work = nW;
+        this.setHead(t, `merge ${name}: Fast-forward`);
+        return `Updating ${H}..${t}\nFast-forward`;
+      }
+      if (ffOnly) fail('fatal: Not possible to fast-forward, aborting.');
+      const B = this.tree(this.mergeBase(H, t)), O = this.headTree(), Th = this.tree(t), result = {}, conflicts = [];
+      for (const f of union(O, Th, B)) {
+        const o = O[f], th = Th[f], b = B[f];
+        const v = o === th ? o : o === b ? th : th === b ? o : (conflicts.push(f), o);
+        setOrDel(result, f, v);
+      }
+      if (conflicts.length) fail(conflicts.map(f => `Auto-merging ${f}\nCONFLICT (content): Merge conflict in ${f}`).join('\n') + '\nMerge conflicts aren’t simulated here, so the merge was cancelled and nothing changed.');
+      const { nI, nW, bad } = this.carry(result);
+      if (bad.length) fail(overwrite(bad));
+      if (!msg) msg = (this.branches[name] ? `Merge branch '${name}'` : this.remote[name] ? `Merge remote-tracking branch '${name}'` : `Merge commit '${name}'`)
+        + (this.head.branch && !['main', 'master'].includes(this.head.branch) ? ` into ${this.head.branch}` : '');
+      const h = this.newCommit(msg, [H, t], result);
+      this.orig = H; this.index = nI; this.work = nW;
+      this.setHead(h, `merge ${name}: Merge made by the 'ort' strategy.`);
+      return `Merge made by the 'ort' strategy.`;
+    }
+    rebase(args) {
+      if (args.some(a => a === '-i' || a === '--interactive')) fail('Interactive rebase needs a text editor, which this simulator doesn’t have. Plain git rebase <branch> is supported.');
+      if (args.some(a => ['--continue', '--abort', '--skip', '--quit'].includes(a))) fail('fatal: No rebase in progress?');
+      const bad = args.find(a => a.startsWith('-'));
+      if (bad) fail(`The ${bad} option isn’t supported in this simulator. Plain git rebase <branch> is supported.`);
+      if (!args.length) fail('fatal: There is no tracking information for the current branch.\n(Name the branch to rebase onto, for example git rebase main.)');
+      const c = this.changes();
+      if (c.unstaged.length) fail('error: cannot rebase: You have unstaged changes.\nerror: Please commit or stash them.');
+      if (c.staged.length) fail('error: cannot rebase: Your index contains uncommitted changes.\nerror: Please commit or stash them.');
+      const U = this.resolve(args[0]);
+      let out = '';
+      if (args[1]) {
+        if (!this.branches[args[1]]) fail(`fatal: no such branch/commit '${args[1]}'`);
+        if (args[1] !== this.head.branch) { this.moveTo(this.branches[args[1]], { branch: args[1] }, `checkout: moving from ${this.where()} to ${args[1]}`); }
+      }
+      const H = this.headHash(), b = this.head.branch;
+      if (this.isAncestor(U, H)) return out + (b ? `Current branch ${b} is up to date.` : 'HEAD is up to date.');
+      const ru = this.reach(U);
+      const picks = [...this.reach(H)].filter(x => !ru.has(x) && this.commits[x].parents.length === 1).sort((x, y) => this.commits[x].seq - this.commits[y].seq);
+      let cur = U, T = this.tree(U); const made = [];
+      for (const p of picks) {
+        const P = this.commits[p];
+        const r = this.applyChange(T, this.tree(P.parents[0]), P.tree);
+        if (r.conflicts.length) fail(`error: could not apply ${p}... ${P.msg}\nThe change conflicts with ${r.conflicts.join(', ')}. Merge conflicts aren’t simulated here, so the rebase was cancelled and nothing changed.`);
+        if (sameTree(r.tree, T)) continue;
+        cur = this.newCommit(P.msg, [cur], r.tree); T = r.tree; made.push(cur);
+      }
+      this.orig = H;
+      this.hardTo(T);
+      this.log(U, `rebase (start): checkout ${args[0]}`);
+      for (const h of made) this.log(h, `rebase (pick): ${this.commits[h].msg}`);
+      if (b) { this.branches[b] = cur; this.log(cur, `rebase (finish): returning to refs/heads/${b}`); }
+      else this.head.hash = cur;
+      return out + `Successfully rebased and updated ${b ? `refs/heads/${b}` : 'detached HEAD'}.`;
+    }
+    stash_(args) {
+      const sub = args[0] && !args[0].startsWith('-') ? args[0] : 'push';
+      const rest = sub === args[0] ? args.slice(1) : args;
+      const idxOf = () => {
+        const a = rest.find(x => !x.startsWith('-'));
+        if (!this.stash.length) fail('No stash entries found.');
+        if (!a) return 0;
+        const m = /^(?:stash@\{)?(\d+)\}?$/.exec(a);
+        if (!m || !this.stash[Number(m[1])]) fail(`error: ${a} is not a valid reference`);
+        return Number(m[1]);
+      };
+      if (sub === 'push' || sub === 'save') {
+        let m = null, u = false;
+        for (let i = 0; i < rest.length; i++) {
+          const a = rest[i];
+          if (a === '-m' || a === '--message') m = rest[++i];
+          else if (a === '-u' || a === '--include-untracked') u = true;
+          else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+          else if (sub === 'save') m = (m ? m + ' ' : '') + a;
+          else fail('Stashing single files isn’t supported in this simulator. Use git stash on its own.');
+        }
+        const H = this.headHash();
+        if (!H) fail('You do not have the initial commit yet');
+        const untracked = this.untrackedMap();
+        if (this.clean() && !(u && Object.keys(untracked).length)) return 'No local changes to save';
+        const W = {}; for (const f of union(this.index, this.headTree())) if (f in this.work) W[f] = this.work[f];
+        const where = this.head.branch || '(no branch)';
+        const e = { base: H, I: { ...this.index }, W, U: u ? untracked : {}, msg: m ? `On ${where}: ${m}` : `WIP on ${where}: ${this.line(H)}` };
+        e.id = fnv(`${this.seed}|stash|${this.n++}`).toString(16).padStart(8, '0').slice(0, 7);
+        this.stash.unshift(e);
+        const T = this.headTree();
+        this.index = { ...T }; this.work = { ...T };
+        if (!u) for (const f in untracked) if (!(f in T)) this.work[f] = untracked[f];
+        this.log(H, 'reset: moving to HEAD');
+        return `Saved working directory and index state ${e.msg}`;
+      }
+      if (sub === 'list') return this.stash.map((e, i) => `stash@{${i}}: ${e.msg}`).join('\n');
+      if (sub === 'clear') { this.stash = []; return ''; }
+      if (sub === 'drop') { const i = idxOf(), e = this.stash.splice(i, 1)[0]; return `Dropped refs/stash@{${i}} (${e.id})`; }
+      if (sub === 'show') { const e = this.stash[idxOf()]; return union(e.W, this.tree(e.base)).filter(f => e.W[f] !== this.tree(e.base)[f]).map(f => ` ${f}`).join('\n'); }
+      if (sub === 'pop' || sub === 'apply') {
+        const i = idxOf(), e = this.stash[i], B = this.tree(e.base), Hh = this.headTree();
+        const changed = union(e.W, B, e.I).filter(f => e.W[f] !== B[f] || e.I[f] !== B[f]);
+        const dirty = this.dirtyFiles(), overlap = changed.filter(f => dirty.includes(f));
+        if (overlap.length) fail(`error: Your local changes to the following files would be overwritten by merge:\n${overlap.map(f => `\t${f}`).join('\n')}\nPlease commit your changes or stash them before you merge.\nAborting`);
+        const conf = changed.filter(f => Hh[f] !== B[f] && e.W[f] !== Hh[f]);
+        if (conf.length) fail(`${conf.map(f => `CONFLICT (content): Merge conflict in ${f}`).join('\n')}\nMerge conflicts aren’t simulated here, so the stash was kept and nothing changed.`);
+        for (const f in e.U) if (f in this.work) fail(`${f} already exists, no checkout\nerror: could not restore untracked files from stash`);
+        for (const f of changed) {
+          setOrDel(this.work, f, e.W[f]);
+          if (B[f] === undefined && e.I[f] !== undefined) this.index[f] = e.I[f];
+        }
+        for (const f in e.U) this.work[f] = e.U[f];
+        let out = this.status([]);
+        if (sub === 'pop') { this.stash.splice(i, 1); out += `\nDropped refs/stash@{${i}} (${e.id})`; }
+        return out;
+      }
+      fail(`error: unknown subcommand: ${sub}\nThe stash commands you can use are git stash, git stash pop, git stash apply, git stash list, git stash drop, and git stash clear.`);
+    }
+    reflog_(args) {
+      if (args.length && !['show', 'HEAD'].includes(args[0])) fail(`Only git reflog for HEAD is supported in this simulator.`);
+      return this.reflog.map((e, i) => `${e.hash} HEAD@{${this.reflog.length - 1 - i}}: ${e.msg}`).reverse().join('\n');
+    }
+    tag(args) {
+      const pos = []; let del = false;
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '-d' || a === '--delete') del = true;
+        else if (a === '-m') i++;
+        else if (a === '-a' || a === '-l' || a === '--list') continue;
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else pos.push(a);
+      }
+      if (del) return pos.map(t => { if (!this.tags[t]) fail(`error: tag '${t}' not found.`); const h = this.tags[t]; delete this.tags[t]; return `Deleted tag '${t}' (was ${h})`; }).join('\n');
+      if (!pos.length) return Object.keys(this.tags).sort().join('\n');
+      const [name, rev] = pos;
+      if (!validName(name)) fail(`fatal: '${name}' is not a valid tag name.`);
+      if (this.tags[name]) fail(`fatal: tag '${name}' already exists`);
+      this.tags[name] = rev ? this.resolve(rev) : this.resolve('HEAD');
+      return '';
+    }
+    push(args) {
+      if (!this.hasRemote) fail('fatal: No configured push destination.\n(This level has no remote repository.)');
+      let force = false; const pos = [];
+      for (const a of args) {
+        if (a === '-f' || a === '--force' || a === '--force-with-lease') force = true;
+        else if (a === '-u' || a === '--set-upstream') continue;
+        else if (a.startsWith('-')) fail(`error: unknown option '${a.replace(/^-+/, '')}'`);
+        else pos.push(a);
+      }
+      if (pos[0] && pos[0] !== 'origin') fail(`fatal: '${pos[0]}' does not appear to be a git repository`);
+      const b = pos[1] || this.head.branch;
+      if (!b) fail('fatal: You are not currently on a branch.');
+      const local = this.branches[b];
+      if (!local) fail(`error: src refspec ${b} does not match any`);
+      const key = `origin/${b}`, old = this.remote[key];
+      if (old === local) return 'Everything up-to-date';
+      if (!old) { this.remote[key] = local; return `To origin\n * [new branch]      ${b} -> ${b}`; }
+      if (this.isAncestor(old, local)) { this.remote[key] = local; return `To origin\n   ${old}..${local}  ${b} -> ${b}`; }
+      if (!force) fail(`To origin\n ! [rejected]        ${b} -> ${b} (non-fast-forward)\nerror: failed to push some refs to 'origin'\nhint: Updates were rejected because the tip of your current branch is behind\nhint: its remote counterpart.`);
+      this.remote[key] = local;
+      return `To origin\n + ${old}...${local} ${b} -> ${b} (forced update)`;
+    }
+
+    exec(line) {
+      const t = tokenize(line);
+      if (!t.length) return '';
+      const [cmd, ...args] = t;
+      if (cmd === 'git') {
+        const [sub, ...rest] = args;
+        if (!sub || sub === 'help' || sub === '--help') return `These are the git commands you can use here: ${SUPPORTED}.`;
+        const map = { status: 'status', log: 'log_', branch: 'branch', switch: 'switch_', checkout: 'checkout', add: 'add', rm: 'rm', restore: 'restore', commit: 'commit', reset: 'reset', revert: 'revert', 'cherry-pick': 'cherryPick', merge: 'merge', rebase: 'rebase', stash: 'stash_', reflog: 'reflog_', tag: 'tag', diff: 'diff', show: 'show', push: 'push' };
+        if (['pull', 'fetch', 'clone', 'remote'].includes(sub)) fail(`git ${sub} isn’t available, because the remote in this game is only pretend. The git commands you can use are ${SUPPORTED}.`);
+        if (!map[sub]) fail(`git ${sub} isn’t part of this simulator. The git commands you can use are ${SUPPORTED}.`);
+        return this[map[sub]](rest);
+      }
+      if (cmd === 'ls') return Object.keys(this.work).sort().join('  ');
+      if (cmd === 'cat') {
+        if (!args.length) fail('cat: Please name a file, for example cat app.js.');
+        return args.map(f => (f in this.work ? this.work[f] : fail(`cat: ${f}: No such file or directory`))).join('\n');
+      }
+      if (cmd === 'echo') {
+        const r = args.findIndex(a => a === '>' || a === '>>');
+        const text = args.slice(0, r < 0 ? undefined : r).join(' ');
+        if (r < 0) return text;
+        const f = args[r + 1];
+        if (!f) fail('echo: Please name the file to write to, like echo "hello" > notes.txt.');
+        this.work[f] = args[r] === '>>' && f in this.work ? `${this.work[f]}\n${text}` : text;
+        return '';
+      }
+      if (cmd === 'rm') {
+        for (const f of args.filter(a => !a.startsWith('-'))) { if (!(f in this.work)) fail(`rm: cannot remove '${f}': No such file or directory`); delete this.work[f]; }
+        return '';
+      }
+      if (cmd === 'pwd') return '/home/you/repo';
+      if (GIT_CMDS.includes(cmd)) fail(`${cmd}: command not found. Did you mean git ${line.trim()}?`);
+      fail(`${cmd}: command not found. Type help to see the commands you can use.`);
+    }
+    run(line) {
+      try { return { out: this.exec(line), err: false }; }
+      catch (e) { if (e instanceof GitError) return { out: e.message, err: true }; throw e; }
+    }
+  }
+
+  // Graph model: visible commits (newest first) with lanes and labels.
+  function graph(r) {
+    const tips = [];
+    if (r.branches.main) tips.push(r.branches.main);
+    if (r.head.branch && r.branches[r.head.branch]) tips.push(r.branches[r.head.branch]);
+    for (const b of Object.keys(r.branches).sort()) tips.push(r.branches[b]);
+    if (r.headHash()) tips.push(r.headHash());
+    tips.push(...Object.values(r.tags), ...Object.values(r.remote));
+    const visible = new Set(); tips.forEach(t => r.reach(t).forEach(c => visible.add(c)));
+    const lost = new Set();
+    for (const e of r.reflog) for (const c of r.reach(e.hash)) if (!visible.has(c)) lost.add(c);
+    const lane = {}; let L = 0;
+    const walk = t => { let x = t, used = false; while (x && lane[x] === undefined) { lane[x] = L; used = true; x = r.commits[x].parents[0]; } if (used) L++; };
+    tips.forEach(walk);
+    [...lost].sort((a, b) => r.commits[b].seq - r.commits[a].seq).forEach(walk);
+    const all = [...visible, ...lost].sort((a, b) => r.commits[b].seq - r.commits[a].seq);
+    const rows = all.map(h => {
+      const labels = [];
+      if (r.headHash() === h) labels.push({ t: r.head.branch ? `HEAD → ${r.head.branch}` : 'HEAD', k: 'head' });
+      for (const b of Object.keys(r.branches).sort()) if (r.branches[b] === h && b !== r.head.branch) labels.push({ t: b, k: 'br' });
+      for (const t of Object.keys(r.tags).sort()) if (r.tags[t] === h) labels.push({ t: `tag: ${t}`, k: 'tag' });
+      for (const t of Object.keys(r.remote).sort()) if (r.remote[t] === h) labels.push({ t, k: 'rem' });
+      return { h, lane: lane[h], lost: lost.has(h), msg: r.commits[h].msg, parents: r.commits[h].parents, labels };
+    });
+    return { rows, lanes: L };
+  }
+
+  // ----- levels -----
+  const W = (f, text) => ['write', f, text];
+  const LEVELS = [
+    {
+      title: 'Unstage a file',
+      goal: 'You ran <code>git add .</code> and accidentally staged <code>secrets.env</code>, which holds a password. Take secrets.env out of the staging area, but keep the file on disk and keep the change to app.js staged.',
+      setup: [W('README.md', '# Tea Shop'), W('app.js', 'startShop()'), 'git add .', 'git commit -m "Initial commit"',
+        W('app.js', 'startShop()\nshowMenu()'), W('secrets.env', 'DB_PASSWORD=hunter2'), 'git add .'],
+      check: (r, c) => r.headHash() === c.init.head && r.head.branch === 'main' && !('secrets.env' in r.index) && r.work['secrets.env'] === c.init.work['secrets.env'] && r.index['app.js'] === c.init.index['app.js'],
+      hints: ['Run git status to see what is staged. It also suggests the command for unstaging a file.',
+        'git restore --staged <file> removes a file from the staging area without touching your copy on disk.',
+        'Type git restore --staged secrets.env.'],
+      lesson: '<code>git restore --staged &lt;file&gt;</code> takes a file out of the staging area and leaves your changes in the working tree, so nothing is lost. The older command <code>git reset &lt;file&gt;</code> does the same thing. Use either one whenever <code>git add</code> picked up more than you meant to commit. To keep a file like secrets.env from being staged again, list it in a .gitignore file.',
+      solutions: [['git restore --staged secrets.env'], ['git reset secrets.env'], ['git rm --cached secrets.env'], ['git reset HEAD secrets.env']],
+      wrong: [['git reset'], ['git restore --staged .'], ['git rm secrets.env']],
+    },
+    {
+      title: 'Fix a commit message',
+      goal: 'Your last commit is called “Add lgoin form”, with a typo. You haven’t pushed it yet. Change its message to “Add login form” without changing any files or adding another commit.',
+      setup: [W('index.html', '<h1>Tea Shop</h1>'), 'git add .', 'git commit -m "Initial commit"', W('login.html', '<form>login</form>'), 'git add .', 'git commit -m "Add lgoin form"'],
+      check: (r, c) => { const C = r.commits[r.branches.main]; return r.head.branch === 'main' && C.msg === 'Add login form' && C.parents.length === 1 && C.parents[0] === c.h('Initial commit') && sameTree(C.tree, r.tree(c.h('Add lgoin form'))); },
+      hints: ['Since you haven’t pushed this commit, you can replace it with a corrected one.',
+        'git commit --amend makes a new commit that replaces the last one. Use -m to give it a new message.',
+        'Type git commit --amend -m "Add login form".'],
+      lesson: '<code>git commit --amend</code> replaces the last commit with a new one that has the same parent. With <code>-m</code> you give it a new message, and anything you have staged goes into it as well. The amended commit gets a new hash, so only amend commits that you haven’t pushed yet.',
+      solutions: [['git commit --amend -m "Add login form"'], ['git reset --soft HEAD~1', 'git commit -m "Add login form"']],
+      wrong: [['git revert HEAD'], ['git commit -m "Add login form"']],
+    },
+    {
+      title: 'Forgot a file',
+      goal: 'You committed “Add discount codes” but forgot to include the new test file <code>cart.test.js</code>. Put the test file into that same commit instead of making a new one, and keep the commit message the same.',
+      setup: [W('cart.js', 'total(items)'), 'git add .', 'git commit -m "Initial commit"', W('cart.js', 'total(items, code)'), W('cart.test.js', 'test(total)'), 'git add cart.js', 'git commit -m "Add discount codes"'],
+      check: (r, c) => { const C = r.commits[r.branches.main]; return r.head.branch === 'main' && C.msg === 'Add discount codes' && C.parents[0] === c.h('Initial commit') && sameTree(C.tree, { ...r.tree(c.h('Add discount codes')), 'cart.test.js': 'test(total)' }); },
+      hints: ['Run git status. The test file is untracked, so it has to be staged first.',
+        'After staging the file, git commit --amend adds it to the last commit. The --no-edit option keeps the existing message.',
+        'Type git add cart.test.js and then git commit --amend --no-edit.'],
+      lesson: 'Staging the missing file and running <code>git commit --amend --no-edit</code> folds it into the last commit and keeps the message as it was. Like any amend, this replaces the commit with a new one, so do it before you push.',
+      solutions: [['git add cart.test.js', 'git commit --amend --no-edit'], ['git add .', 'git commit --amend -m "Add discount codes"'], ['git reset --soft HEAD~1', 'git add cart.test.js', 'git commit -m "Add discount codes"']],
+      wrong: [['git add cart.test.js', 'git commit -m "Add tests"'], ['git commit --amend --no-edit']],
+    },
+    {
+      title: 'Throw away changes',
+      goal: 'Your experiments in <code>style.css</code> and <code>config.json</code> went nowhere. Throw away all changes to tracked files so they match the last commit again. Keep <code>notes.txt</code>, which is untracked.',
+      setup: [W('index.html', '<h1>Tea Shop</h1>'), W('style.css', 'h1 { color: green }'), W('config.json', '{"theme": "light"}'), 'git add .', 'git commit -m "Initial commit"',
+        W('style.css', 'h1 { color: hotpink }'), W('config.json', '{"theme": "neon"}'), 'git add config.json', W('notes.txt', 'ideas for later')],
+      check: (r, c) => r.headHash() === c.init.head && r.head.branch === 'main' && r.clean() && r.work['notes.txt'] === 'ideas for later',
+      hints: ['Run git status. One file has staged changes, and the other has unstaged changes.',
+        'git reset --hard resets the staging area and every tracked file to the last commit. It leaves untracked files alone.',
+        'Type git reset --hard. Another way is git restore --staged --worktree config.json style.css.'],
+      lesson: '<code>git restore &lt;file&gt;</code> throws away unstaged changes, and <code>git restore --staged &lt;file&gt;</code> unstages changes first. <code>git reset --hard</code> does both for every tracked file at once. Untracked files such as notes.txt are left alone by these commands. Changes that were never committed or stashed are usually gone for good, so check <code>git status</code> and <code>git diff</code> before you discard anything.',
+      solutions: [['git reset --hard'], ['git restore --staged --worktree config.json style.css'], ['git restore --staged config.json', 'git restore .'], ['git restore --staged .', 'git checkout -- .'], ['git stash']],
+      wrong: [['git restore style.css'], ['git reset'], ['git reset --hard', 'rm notes.txt']],
+    },
+    {
+      title: 'Undo a commit, keep the work',
+      goal: 'You committed “Add search (half done)” too early. Undo that commit so main points at “Add header” again, but keep all of its changes staged so you can finish the work.',
+      setup: [W('index.html', '<h1>Tea Shop</h1>'), W('app.js', 'startShop()'), 'git add .', 'git commit -m "Initial commit"', W('header.html', '<header>Tea</header>'), 'git add .', 'git commit -m "Add header"',
+        W('search.js', 'search(query)'), W('app.js', 'startShop()\nsearch()'), 'git add .', 'git commit -m "Add search (half done)"'],
+      check: (r, c) => { const T = r.tree(c.h('Add search (half done)')); return r.head.branch === 'main' && r.branches.main === c.h('Add header') && sameTree(r.index, T) && sameTree(r.work, T); },
+      hints: ['git reset moves the current branch to another commit. Its mode decides what happens to the changes from the commits you move past.',
+        'With --soft, the branch moves but the changes stay staged. HEAD~1 means one commit before HEAD.',
+        'Type git reset --soft HEAD~1.'],
+      lesson: '<code>git reset --soft HEAD~1</code> moves the branch back one commit and leaves everything from that commit staged. <code>git reset --mixed</code>, the default, does the same but unstages the changes, and <code>git reset --hard</code> throws them away. The undone commit still exists for a while, and <code>git reflog</code> can find it if you change your mind.',
+      solutions: [['git reset --soft HEAD~1'], ['git reset HEAD~1', 'git add .'], (c) => [`git reset --soft ${c.h('Add header')}`], ['git reset --soft HEAD^']],
+      wrong: [['git reset --hard HEAD~1'], ['git reset HEAD~1'], ['git revert HEAD']],
+    },
+    {
+      title: 'Committed to the wrong branch',
+      goal: 'You committed “Add dark mode toggle” to main, but it belongs on a new branch called <code>feature</code>. You haven’t pushed it yet. Make feature point at that commit, move main back to where it was before it, and leave no uncommitted changes behind.',
+      remote: true,
+      setup: [W('index.html', '<h1>Tea Shop</h1>'), 'git add .', 'git commit -m "Initial commit"', W('contact.html', '<p>Call us</p>'), 'git add .', 'git commit -m "Add contact page"', ['push', 'main'],
+        W('theme.js', 'toggleDark()'), 'git add .', 'git commit -m "Add dark mode toggle"'],
+      check: (r, c) => { const f = r.branches.feature; return !!f && r.commits[f].msg === 'Add dark mode toggle' && sameTree(r.commits[f].tree, r.tree(c.h('Add dark mode toggle'))) && r.branches.main === c.h('Add contact page') && r.clean(); },
+      hints: ['First put a new branch label on the current commit, so the work has a home.',
+        'Then move main back one commit with git reset --hard HEAD~1. The commit stays safe on feature.',
+        'Type git branch feature and then git reset --hard HEAD~1.'],
+      lesson: 'A branch is just a label that points at a commit. <code>git branch feature</code> puts a new label on the current commit, and <code>git reset --hard HEAD~1</code> then moves main back one commit while the work stays safe on feature. This is fine because the commit hadn’t been pushed. <code>git branch -f main HEAD~1</code> is another way to move a branch that you don’t have checked out.',
+      solutions: [['git branch feature', 'git reset --hard HEAD~1'], ['git switch -c feature', 'git branch -f main HEAD~1'], ['git reset --hard HEAD~1', 'git branch feature HEAD@{1}'], ['git branch feature', 'git reset --hard origin/main'], ['git checkout -b feature', 'git switch main', 'git reset --hard HEAD~1']],
+      wrong: [['git switch -c feature'], ['git reset --hard HEAD~1', 'git branch feature'], ['git branch feature', 'git reset --soft HEAD~1']],
+    },
+    {
+      title: 'Undo an accidental merge',
+      goal: 'You meant to look at <code>experiment</code> but merged it into main by accident. The merge hasn’t been pushed. Put main back exactly where it was before the merge, and keep the experiment branch.',
+      remote: true,
+      setup: [W('app.js', 'startShop()'), 'git add .', 'git commit -m "Initial commit"', W('cart.js', 'total(items)'), 'git add .', 'git commit -m "Add cart"',
+        'git switch -c experiment', W('layout.js', 'newLayoutEngine()'), 'git add .', 'git commit -m "Try new layout engine"', 'git switch main',
+        W('about.html', '<p>About us</p>'), 'git add .', 'git commit -m "Add about page"', ['push', 'main'], 'git merge experiment'],
+      check: (r, c) => r.head.branch === 'main' && r.branches.main === c.h('Add about page') && r.branches.experiment === c.h('Try new layout engine') && r.clean(),
+      hints: ['Run git log --oneline --graph. The merge commit is on top, and its first parent is where main was before.',
+        'git reset --hard HEAD~1 follows the first parent. ORIG_HEAD also points to where main was before the merge.',
+        'Type git reset --hard HEAD~1.'],
+      lesson: 'A merge commit’s first parent is the commit your branch was on before the merge, so <code>git reset --hard HEAD~1</code> undoes a merge that hasn’t been pushed. <code>ORIG_HEAD</code> points there too, because git merge saves the old position before it moves the branch. If the merge had already been pushed, you would use <code>git revert -m 1 &lt;merge&gt;</code> instead, which adds a new commit that undoes it.',
+      solutions: [['git reset --hard HEAD~1'], ['git reset --hard ORIG_HEAD'], ['git reset --hard origin/main'], ['git reset --hard HEAD@{1}']],
+      wrong: [['git reset --hard HEAD~2'], ['git revert HEAD'], ['git revert -m 1 HEAD'], ['git reset --hard HEAD~1', 'git branch -D experiment']],
+    },
+    {
+      title: 'Undo a shared commit',
+      goal: 'The commit “Show prices in cents” broke the shop. It has already been pushed, so your teammates have it too. Undo its changes without rewriting history: every commit that is on origin/main must stay in main’s history, and the later footer commit must stay.',
+      remote: true,
+      setup: [W('shop.html', '<h1>Tea Shop</h1>'), W('prices.json', '{"tea": 4.50, "cake": 3.00}'), 'git add .', 'git commit -m "Initial commit"',
+        W('checkout.html', '<form>pay</form>'), 'git add .', 'git commit -m "Add checkout page"',
+        W('prices.json', '{"tea": 450, "cake": 300}'), 'git add .', 'git commit -m "Show prices in cents"',
+        W('footer.html', '<footer>links</footer>'), 'git add .', 'git commit -m "Add footer links"', ['push', 'main']],
+      check: (r, c) => { const T = r.tree(r.branches.main); return r.isAncestor(c.init.remote['origin/main'], r.branches.main) && T['prices.json'] === '{"tea": 4.50, "cake": 3.00}' && T['footer.html'] === '<footer>links</footer>' && T['checkout.html'] === '<form>pay</form>' && r.clean() && (!r.remote['origin/main'] || r.isAncestor(c.init.remote['origin/main'], r.remote['origin/main'])); },
+      hints: ['Rewriting shared history with git reset would force your teammates to repair their copies. Add a new commit that undoes the bad one instead.',
+        'git revert <commit> creates that undo commit. Run git log --oneline to find the hash.',
+        (r, c) => `Type git revert ${c.h('Show prices in cents')}.`],
+      lesson: '<code>git revert &lt;commit&gt;</code> adds a new commit that undoes the changes from an earlier one. History only grows, so teammates who already have the bad commit simply pull the fix. Removing the commit with <code>git reset</code> would need a forced push and would cause trouble for everyone who already has it. Use revert for anything that has been shared, and save reset for local work.',
+      solutions: [(c) => [`git revert ${c.h('Show prices in cents')}`], ['git revert HEAD~1'], ['git revert HEAD~1', 'git push'], [`echo '{"tea": 4.50, "cake": 3.00}' > prices.json`, 'git commit -am "Go back to prices in dollars"']],
+      wrong: [['git reset --hard HEAD~2'], ['git reset --hard HEAD~2', (c) => `git cherry-pick ${c.h('Add footer links')}`, 'git push --force'], ['git revert HEAD'], ['git reset --hard HEAD~2', (c) => `git cherry-pick ${c.h('Add footer links')}`]],
+    },
+    {
+      title: 'Recover a deleted branch',
+      goal: 'You deleted the branch <code>experiment</code> with <code>git branch -D</code> before it was merged. Bring it back so experiment points at its last commit, “Add parser benchmarks”, again.',
+      setup: [W('parser.js', 'parse(slowly)'), 'git add .', 'git commit -m "Initial commit"', 'git switch -c experiment', W('parser.js', 'parse(quickly)'), 'git add .', 'git commit -m "Try a faster parser"',
+        W('bench.js', 'benchmark(parse)'), 'git add .', 'git commit -m "Add parser benchmarks"', 'git switch main', 'git branch -D experiment'],
+      check: (r, c) => r.branches.experiment === c.h('Add parser benchmarks'),
+      hints: ['Deleting a branch only removes its label. The commits are still there, and git reflog lists every place HEAD has been.',
+        'Find the reflog entry for the commit “Add parser benchmarks”, then create a branch that points at it.',
+        (r, c) => `Type git branch experiment ${c.h('Add parser benchmarks')}.`],
+      lesson: '<code>git reflog</code> lists every position HEAD has been at, including commits on branches that no longer exist. Deleting a branch only removes the label, so <code>git branch experiment &lt;hash&gt;</code> (or <code>HEAD@{1}</code>) brings it back. Git keeps reflog entries for weeks by default, but not forever, so recover lost work soon.',
+      solutions: [['git branch experiment HEAD@{1}'], (c) => [`git branch experiment ${c.h('Add parser benchmarks')}`], (c) => [`git switch -c experiment ${c.h('Add parser benchmarks')}`], (c) => [`git checkout ${c.h('Add parser benchmarks')}`, 'git switch -c experiment']],
+      wrong: [['git branch experiment'], ['git branch experiment HEAD@{0}']],
+    },
+    {
+      title: 'Cherry-pick a fix',
+      goal: 'The fix “Fix crash on empty cart” was made on the <code>redesign</code> branch, which isn’t ready yet. Bring just that fix to main, without the other redesign commits, and leave redesign as it is.',
+      setup: [W('cart.js', 'total = items.reduce(add)'), W('theme.css', 'body { color: black }'), 'git add .', 'git commit -m "Initial commit"', 'git switch -c redesign',
+        W('theme.css', 'body { color: navy }'), 'git add .', 'git commit -m "Start redesign"',
+        W('cart.js', 'total = items.reduce(add, 0)'), 'git add .', 'git commit -m "Fix crash on empty cart"',
+        W('theme.css', 'body { color: teal }'), W('layout.css', 'main { display: grid }'), 'git add .', 'git commit -m "Rework layout"', 'git switch main'],
+      check: (r, c) => { const m = r.branches.main, T = r.tree(m), hist = [...r.reach(m)].map(h => r.commits[h].msg);
+        return T['cart.js'] === 'total = items.reduce(add, 0)' && T['theme.css'] === 'body { color: black }' && !('layout.css' in T) && r.isAncestor(c.h('Initial commit'), m) && !hist.includes('Start redesign') && !hist.includes('Rework layout') && r.branches.redesign === c.init.branches.redesign; },
+      hints: ['Run git log --oneline redesign to see the commits on that branch.',
+        'git cherry-pick <commit> copies one commit onto the branch you are on.',
+        (r, c) => `Type git cherry-pick ${c.h('Fix crash on empty cart')}.`],
+      lesson: '<code>git cherry-pick &lt;commit&gt;</code> copies the changes from one commit onto your current branch as a new commit with a new hash. It’s the right tool for bringing a single fix across without merging a whole branch. You can also name the commit relative to a branch, as in <code>redesign~1</code>, which means the commit just before the tip of redesign.',
+      solutions: [(c) => [`git cherry-pick ${c.h('Fix crash on empty cart')}`], ['git cherry-pick redesign~1'], ['git cherry-pick redesign^']],
+      wrong: [['git merge redesign'], ['git cherry-pick redesign'], ['git reset --hard redesign']],
+    },
+    {
+      title: 'Detached HEAD rescue',
+      goal: 'You checked out an older commit to try an idea and made two commits in detached HEAD state. Keep that work by giving it a branch called <code>caching</code>, and switch to that branch so HEAD is attached again. Leave main as it is.',
+      setup: [W('app.js', 'startShop()'), 'git add .', 'git commit -m "Initial commit"', W('api.js', 'fetchMenu()'), 'git add .', 'git commit -m "Add API client"',
+        W('settings.html', '<form>settings</form>'), 'git add .', 'git commit -m "Add settings page"', 'git checkout HEAD~1',
+        W('cache.js', 'cache(60)'), 'git add .', 'git commit -m "Prototype caching"', W('cache.js', 'cache(300)'), 'git add .', 'git commit -m "Tune cache size"'],
+      check: (r, c) => r.branches.caching === c.h('Tune cache size') && r.head.branch === 'caching' && r.branches.main === c.init.branches.main,
+      hints: ['Run git status. HEAD is detached, which means no branch points at your two new commits.',
+        'git switch -c <name> creates a branch right where HEAD is and switches to it.',
+        'Type git switch -c caching.'],
+      lesson: 'In detached HEAD state, HEAD points straight at a commit instead of a branch. New commits made there aren’t on any branch, so switching away leaves them behind. <code>git switch -c &lt;name&gt;</code> creates a branch at the current commit and attaches HEAD to it, which keeps the work safe. If you have already switched away, <code>git reflog</code> still shows the lost commits.',
+      solutions: [['git switch -c caching'], ['git checkout -b caching'], ['git branch caching', 'git switch caching'], ['git switch main', 'git branch caching HEAD@{1}', 'git switch caching']],
+      wrong: [['git switch main'], ['git branch caching'], ['git switch main', 'git switch -c caching']],
+    },
+    {
+      title: 'Rebase a feature branch',
+      goal: 'main has moved on since you started <code>feature</code>. Replay feature’s two commits on top of the latest main so the history is a straight line with no merge commit. Leave main where it is.',
+      setup: [W('app.js', 'startShop()'), W('README.md', '# Tea Shop'), 'git add .', 'git commit -m "Initial commit"', W('products.js', 'listProducts()'), 'git add .', 'git commit -m "Add product list"',
+        'git switch -c feature', W('search.js', 'search(query)'), 'git add .', 'git commit -m "Add search box"', W('search.js', 'search(query, { live: true })'), 'git add .', 'git commit -m "Search as you type"',
+        'git switch main', W('README.md', '# Tea Shop\nRun npm start'), 'git add .', 'git commit -m "Document setup"', W('footer.html', '<footer>links</footer>'), 'git add .', 'git commit -m "Add footer"', 'git switch feature'],
+      check: (r, c) => {
+        const f = r.branches.feature; if (!f || r.branches.main !== c.init.branches.main) return false;
+        const F2 = r.commits[f]; if (F2.msg !== 'Search as you type' || F2.parents.length !== 1) return false;
+        const F1 = r.commits[F2.parents[0]];
+        return F1.msg === 'Add search box' && F1.parents.length === 1 && F1.parents[0] === r.branches.main && F2.tree['search.js'] === 'search(query, { live: true })' && F2.tree['footer.html'] === '<footer>links</footer>';
+      },
+      hints: ['Run git log --oneline --graph --all to see where feature split off from main.',
+        'git rebase <branch> replays the commits from your current branch on top of another branch.',
+        'Make sure you are on feature, then type git rebase main.'],
+      lesson: '<code>git rebase main</code> takes the commits that are on your branch but not on main and replays them one by one on top of main. The replayed commits get new hashes, and the result is a straight line with no merge commit. Rebase only branches that nobody else is working on, because it rewrites their commits.',
+      solutions: [['git rebase main'], ['git switch main', 'git rebase main feature'], (c) => ['git reset --hard main', `git cherry-pick ${c.h('Add search box')} ${c.h('Search as you type')}`]],
+      wrong: [['git merge main'], ['git switch main', 'git merge feature'], ['git reset --hard main']],
+    },
+    {
+      title: 'Stash and switch',
+      goal: 'You are halfway through some edits to <code>app.js</code> on feature. Before you continue, fast-forward main to include the fix on <code>fix-login</code>. Then go back to feature with your unfinished edits restored and still uncommitted.',
+      setup: [W('app.js', 'render()'), W('login.js', 'login()'), 'git add .', 'git commit -m "Initial commit"', 'git switch -c feature', W('app.js', 'render()\nshowWishlist()'), 'git add .', 'git commit -m "Start wishlist"',
+        'git switch main', 'git switch -c fix-login', W('login.js', 'login({ redirect: true })'), 'git add .', 'git commit -m "Fix login redirect"', 'git switch feature',
+        W('app.js', 'render()\nshowWishlist()\nsaveWishlist()')],
+      check: (r, c) => r.isAncestor(c.h('Fix login redirect'), r.branches.main) && !r.isAncestor(c.h('Start wishlist'), r.branches.main) && r.head.branch === 'feature' && r.branches.feature === c.init.branches.feature && r.work['app.js'] === c.init.work['app.js'],
+      hints: ['Try git switch main. Git refuses, because your edits to app.js would be overwritten.',
+        'git stash puts your uncommitted changes aside, and git stash pop brings them back later.',
+        'Type git stash, git switch main, git merge fix-login, git switch feature, and finally git stash pop.'],
+      lesson: '<code>git stash</code> saves your uncommitted changes and cleans the working tree so you can switch branches. <code>git stash pop</code> applies the most recent stash and removes it from the list, and <code>git stash list</code> shows what is saved. Git refused the first switch because app.js is different on main, and switching would have overwritten your edits.',
+      solutions: [['git stash', 'git switch main', 'git merge fix-login', 'git switch feature', 'git stash pop'], ['git commit -am "WIP"', 'git switch main', 'git merge fix-login', 'git switch feature', 'git reset HEAD~1'], ['git stash', 'git checkout main', 'git merge fix-login', 'git checkout feature', 'git stash apply']],
+      wrong: [['git switch main'], ['git stash', 'git switch main', 'git merge fix-login', 'git switch feature'], ['git reset --hard', 'git switch main', 'git merge fix-login', 'git switch feature'], ['git stash', 'git switch main', 'git merge feature', 'git switch feature', 'git stash pop']],
+    },
+  ];
+
+  function setup(level, index) {
+    const r = new Repo(`level${index + 1}`);
+    r.hasRemote = !!level.remote;
+    for (const step of level.setup) {
+      if (Array.isArray(step)) {
+        if (step[0] === 'write') r.work[step[1]] = step[2];
+        else if (step[0] === 'push') r.remote[`origin/${step[1]}`] = r.branches[step[1]];
+        continue;
+      }
+      const res = r.run(step);
+      if (res.err) throw new Error(`Setup failed on "${step}": ${res.out}`);
+    }
+    const setupCommits = Object.keys(r.commits);
+    const ctx = {
+      init: { head: r.headHash(), branches: { ...r.branches }, remote: { ...r.remote }, index: { ...r.index }, work: { ...r.work } },
+      h: msg => { let found; for (const k of setupCommits) if (r.commits[k].msg === msg) found = k; return found; },
+    };
+    return { repo: r, ctx };
+  }
+  function passes(level, r, ctx) { try { return !!level.check(r, ctx); } catch (e) { return false; } }
+
+  return { Repo, LEVELS, setup, passes, graph, tokenize, GitError };
+})();
+// SIM-END
+
+(() => {
+  const BEST_KEY = 'commitRescueBest', { LEVELS } = GitSim, N = LEVELS.length;
+  const $ = id => document.getElementById(id);
+  const out = $('out'), cmd = $('cmd');
+  const s = { state: 'ready', lv: 0, repo: null, ctx: null, hint: 0, cmds: 0, hist: [], hpos: 0, draft: '' };
+  const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+  const esc = t => String(t).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
+  const announce = t => { $('live').textContent = ''; setTimeout(() => { $('live').textContent = t; }, 30); };
+
+  function print(text, cls = 'o') {
+    for (const part of String(text).split('\n')) {
+      const d = document.createElement('div');
+      d.className = cls; d.textContent = part || ' ';
+      out.append(d);
+    }
+    while (out.childElementCount > 600) out.firstChild.remove();
+    out.scrollTop = out.scrollHeight;
+  }
+
+  function hud() {
+    $('level').textContent = `${s.lv + 1} of ${N}`;
+    $('best').textContent = Arcade.best(BEST_KEY);
+    $('count').textContent = s.cmds;
+  }
+
+  function showGoal() {
+    const L = LEVELS[s.lv];
+    const box = $('goalbox');
+    box.classList.remove('done');
+    $('gt').textContent = `Level ${s.lv + 1}: ${L.title}`;
+    $('gbody').innerHTML = `<p>${L.goal}</p>`;
+  }
+
+  function load(i, quiet) {
+    s.lv = i; s.hint = 0; s.cmds = 0; s.state = 'play';
+    const { repo, ctx } = GitSim.setup(LEVELS[i], i);
+    s.repo = repo; s.ctx = ctx;
+    cmd.disabled = false;
+    if (!quiet) {
+      out.replaceChildren();
+      print(`Level ${i + 1}: ${LEVELS[i].title}.`, 'i');
+      print('Type hint if you get stuck, or git log --oneline --all to look around.', 'i');
+    }
+    showGoal(); draw(); hud();
+  }
+
+  function draw() {
+    drawGraph(); drawSide();
+    const r = s.repo;
+    $('ps').textContent = `~/repo (${r.head.branch || r.head.hash}) $`;
+  }
+
+  function drawGraph() {
+    const r = s.repo, g = GitSim.graph(r), R = 30, LW = 22, X0 = 16, Y0 = 20;
+    const nl = Math.max(1, g.lanes), tx = X0 + (nl - 1) * LW + 18;
+    const pos = {}; g.rows.forEach((row, i) => { pos[row.h] = { x: X0 + row.lane * LW, y: Y0 + i * R, lane: row.lane, lost: row.lost }; });
+    const paths = [], nodes = [], texts = []; let maxX = 300;
+    for (const row of g.rows) {
+      const c = pos[row.h];
+      for (const p of row.parents) {
+        const q = pos[p]; if (!q) continue;
+        const cls = (row.lost || q.lost) ? 'lost' : `l${Math.max(c.lane, q.lane) % 5}`;
+        let d;
+        if (c.x === q.x) d = `M${c.x} ${c.y}L${q.x} ${q.y}`;
+        else if (c.lane > q.lane) { const y1 = Math.max(c.y, q.y - R); d = `M${c.x} ${c.y}L${c.x} ${y1}C${c.x} ${(y1 + q.y) / 2} ${q.x} ${(y1 + q.y) / 2} ${q.x} ${q.y}`; }
+        else { const y1 = Math.min(q.y, c.y + R); d = `M${c.x} ${c.y}C${c.x} ${(c.y + y1) / 2} ${q.x} ${(c.y + y1) / 2} ${q.x} ${y1}L${q.x} ${q.y}`; }
+        paths.push(`<path class="${cls}" d="${d}"/>`);
+      }
+      const isHead = r.headHash() === row.h;
+      nodes.push(`<circle class="${row.lost ? 'lost' : `l${row.lane % 5}`}${isHead ? ' at' : ''}" cx="${c.x}" cy="${c.y}" r="7"/>`);
+      let x = tx;
+      texts.push(`<text class="hash${row.lost ? ' lostt' : ''}" x="${x}" y="${c.y + 4}">${row.h}</text>`);
+      x += 7 * 7.3 + 8;
+      for (const l of row.labels) {
+        const w = l.t.length * 6.7 + 12;
+        texts.push(`<rect class="pill p-${l.k}" x="${x}" y="${c.y - 9}" width="${w}" height="18" rx="9"/><text class="lbl t-${l.k}" x="${x + 6}" y="${c.y + 4}">${esc(l.t)}</text>`);
+        x += w + 6;
+      }
+      const msg = row.msg.length > 44 ? row.msg.slice(0, 43) + '…' : row.msg;
+      texts.push(`<text class="${row.lost ? 'lostt' : 'msg'}" x="${x + 2}" y="${c.y + 4}">${esc(msg)}</text>`);
+      maxX = Math.max(maxX, x + msg.length * 7.3 + 16);
+    }
+    const h = Y0 * 2 + Math.max(0, g.rows.length - 1) * R;
+    const head = r.headHash();
+    const label = `Commit graph with ${plural(g.rows.length, 'commit')}. ${r.head.branch ? `HEAD is on ${r.head.branch}` : 'HEAD is detached'}${head ? ` at ${head}, ${r.commits[head].msg}` : ''}.`;
+    $('graph').innerHTML = `<svg role="img" aria-label="${esc(label)}" width="${Math.ceil(maxX)}" height="${h}" viewBox="0 0 ${Math.ceil(maxX)} ${h}">${paths.join('')}${nodes.join('')}${texts.join('')}</svg>`;
+  }
+
+  function drawSide() {
+    const r = s.repo, c = r.changes();
+    $('sHead').textContent = r.head.branch ? `On branch ${r.head.branch}` : `Detached at ${r.head.hash}`;
+    const fill = (id, items, cls) => {
+      const ul = $(id);
+      ul.replaceChildren(...(items.length ? items : [null]).map(it => {
+        const li = document.createElement('li');
+        if (it === null) { li.className = 'none'; li.textContent = 'None'; }
+        else { li.className = cls; li.textContent = it; }
+        return li;
+      }));
+    };
+    fill('sSt', c.staged.map(([f, k]) => `${k}: ${f}`), 'st');
+    fill('sUn', c.unstaged.map(([f, k]) => `${k}: ${f}`), 'un');
+    fill('sUt', c.untracked, 'ut');
+    $('sStash').textContent = r.stash.length ? plural(r.stash.length, 'entry', 'entries') : 'Empty';
+    $('sStash').className = r.stash.length ? '' : 'none';
+  }
+
+  function complete() {
+    s.state = 'lesson';
+    const L = LEVELS[s.lv];
+    const best = Arcade.record(BEST_KEY, s.lv + 1);
+    hud();
+    $('best').textContent = best;
+    const box = $('goalbox');
+    box.classList.add('done');
+    $('gt').textContent = `Level ${s.lv + 1} complete!`;
+    const last = s.lv + 1 >= N;
+    $('gbody').innerHTML = `<p>You solved it with ${plural(s.cmds, 'command')}.</p><p class="lesson">${L.lesson}</p><div class="row"><button id="next" type="button">${last ? 'Finish' : 'Next level'}</button></div>`;
+    print(`Level ${s.lv + 1} complete! Read the lesson above, then press Enter to continue.`, 'g');
+    cmd.disabled = true;
+    $('next').addEventListener('click', next);
+    $('next').focus();
+    announce(`Level ${s.lv + 1} complete. ${box.querySelector('.lesson').textContent}`);
+  }
+
+  function next() {
+    if (s.state !== 'lesson') return;
+    if (s.lv + 1 < N) { load(s.lv + 1); cmd.focus(); return; }
+    s.state = 'over';
+    $('ovt').textContent = 'All levels complete';
+    $('ovp').textContent = `You fixed all ${N} repositories. You can play through the levels again, or type level and a number to replay one.`;
+    $('go').textContent = 'Play again';
+    $('fresh').hidden = true;
+    $('ov').hidden = false;
+    $('go').focus();
+    announce(`You finished all ${N} levels.`);
+  }
+
+  function hint() {
+    const L = LEVELS[s.lv], i = Math.min(s.hint, L.hints.length - 1), h = L.hints[i];
+    const text = typeof h === 'function' ? h(s.repo, s.ctx) : h;
+    print(`Hint ${i + 1} of ${L.hints.length}: ${text}`, 'i');
+    s.hint++;
+  }
+
+  function help() {
+    print('Type git commands just like in a real terminal. The git commands available here are status, log, branch, switch, checkout, add, rm, restore, commit, reset, revert, cherry-pick, merge, rebase, stash, reflog, tag, diff, show, and push.', 'i');
+    print('You can also use ls, cat <file>, and echo "text" > <file> to look at and edit files.', 'i');
+    print('Game commands: hint shows the next hint, goal repeats the goal, reset-level starts the level over, level <number> jumps to a level you have unlocked, and clear empties the terminal.', 'i');
+  }
+
+  function submit() {
+    if (s.state !== 'play') return;
+    const line = cmd.value; cmd.value = '';
+    print(`$ ${line}`, 'c');
+    const t = line.trim();
+    if (!t) return;
+    if (s.hist[s.hist.length - 1] !== t) s.hist.push(t);
+    s.hpos = s.hist.length; s.draft = '';
+    const [w, arg] = t.split(/\s+/);
+    if (w === 'hint') return hint();
+    if (w === 'help') return help();
+    if (w === 'goal') return print($('gbody').textContent, 'i');
+    if (w === 'clear') { out.replaceChildren(); return; }
+    if (w === 'reset-level') { load(s.lv, true); print('The repository is back to how this level started.', 'i'); return; }
+    if (w === 'level') {
+      const max = Math.min(N, Arcade.best(BEST_KEY) + 1), n = Number(arg);
+      if (!Number.isInteger(n) || n < 1 || n > max) { print(max === 1 ? 'Only level 1 is unlocked so far. Finish it to unlock level 2.' : `You can jump to any level from 1 to ${max}, for example level ${max}.`, 'e'); return; }
+      load(n - 1); return;
+    }
+    s.cmds++;
+    let res;
+    try { res = s.repo.run(t); } catch (e) { res = { out: `Something went wrong in the simulator: ${e.message}`, err: true }; }
+    if (res.out) print(res.out, res.err ? 'e' : 'o');
+    draw(); hud();
+    if (GitSim.passes(LEVELS[s.lv], s.repo, s.ctx)) complete();
+  }
+
+  cmd.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); if (!e.repeat) submit(); }
+    else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!s.hist.length) return;
+      if (s.hpos === s.hist.length) s.draft = cmd.value;
+      s.hpos = Math.max(0, s.hpos - 1); cmd.value = s.hist[s.hpos];
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (s.hpos >= s.hist.length) return;
+      s.hpos++; cmd.value = s.hpos === s.hist.length ? s.draft : s.hist[s.hpos];
+    }
+  });
+
+  function start(fromFirst) {
+    const best = Arcade.best(BEST_KEY);
+    const lv = fromFirst || best >= N ? 0 : Math.min(best, N - 1);
+    $('ov').hidden = true;
+    load(lv);
+    cmd.focus();
+  }
+
+  $('go').addEventListener('click', () => start(s.state === 'over'));
+  $('fresh').addEventListener('click', () => start(true));
+  $('out').addEventListener('click', () => { if (s.state === 'play' && !getSelection().toString()) cmd.focus(); });
+
+  addEventListener('keydown', e => {
+    if (e.altKey || e.ctrlKey || e.metaKey || e.defaultPrevented) return;
+    const tag = document.activeElement && document.activeElement.tagName;
+    if (e.key === 'Enter' && (s.state === 'ready' || s.state === 'over')) {
+      e.preventDefault();
+      if (!e.repeat) (document.activeElement === $('fresh') ? $('fresh') : $('go')).click();
+      return;
+    }
+    if (e.key === 'Enter' && s.state === 'lesson') { e.preventDefault(); if (!e.repeat) next(); return; }
+    if (s.state === 'play' && e.key.length === 1 && document.activeElement !== cmd && tag !== 'INPUT') cmd.focus();
+  });
+
+  // Start screen: show the level the player would continue from behind the overlay.
+  const best = Arcade.best(BEST_KEY);
+  if (best >= 1 && best < N) {
+    $('go').textContent = `Continue from level ${best + 1}`;
+    $('fresh').hidden = false;
+    $('ovp').textContent = `Each level shows a Git repository that needs fixing. You have finished ${plural(best, 'level')} so far, so you can pick up at level ${best + 1}. Type hint whenever you get stuck.`;
+  } else if (best >= N) {
+    $('ovp').textContent = `You have finished all ${N} levels. Start again from level 1, or type level and a number in the terminal to replay any level.`;
+  }
+  load(best >= 1 && best < N ? best : 0);
+  s.state = 'ready';
+  cmd.disabled = true;
+  $('go').focus();
+})();
+</script>

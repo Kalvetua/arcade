@@ -1,0 +1,444 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<title>Word Guess</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="arcade.css">
+<style>
+  /* Layout: hint, delete and submit controls, then the A to Z letter tracker, then the guess grid.
+     Feedback never relies on color alone: every scored tile also carries a marker
+     (a dot for the right spot, a ring for elsewhere in the word, a cross for not in the word) and a distinct shape. */
+  :root { --accent: #6fd3c6; --hit: #6fd3c6; --near: #ff9bd2; }
+  h1 .w { color: var(--hit); }
+  h1 .g { color: var(--near); }
+  #streak { color: var(--accent); }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 10px; }
+  .controls button { font-size: 0.75rem; padding: 6px 12px; }
+  .abc {
+    display: grid; grid-template-columns: repeat(13, 1fr); gap: 4px;
+    width: min(100%, 420px); margin: 0 auto 16px;
+  }
+  .abc button {
+    position: relative; min-width: 0; padding: 7px 0 9px;
+    background: var(--ground); color: var(--ink); box-shadow: inset 0 0 0 1px var(--grid);
+    font: 600 0.8rem var(--mono); text-transform: uppercase; border-radius: 3px;
+  }
+  .board {
+    display: grid; grid-template-rows: repeat(7, 1fr); gap: 6px;
+    width: min(100%, 280px); margin: 0 auto; border-radius: 4px;
+  }
+  .board:focus-visible { outline: 3px solid var(--accent); outline-offset: 6px; }
+  .row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .row.shake { animation: shake 360ms ease; }
+  @keyframes shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+  .t {
+    position: relative; aspect-ratio: 1; display: grid; place-items: center;
+    font: 400 clamp(1.1rem, 5.5vw, 1.55rem) var(--display); text-transform: uppercase;
+    background: var(--ground); box-shadow: inset 0 0 0 2px var(--grid); border-radius: 4px;
+    transition: background 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
+  }
+  .t.filled { box-shadow: inset 0 0 0 2px var(--muted); }
+  /* Shared states for grid tiles, tracker letters and the legend swatches. */
+  .correct { background: var(--hit) !important; color: var(--ground) !important; box-shadow: none !important; }
+  .present {
+    background: color-mix(in srgb, var(--near) 12%, var(--ground)) !important; color: var(--ink) !important;
+    box-shadow: none !important; outline: 3px dashed var(--near); outline-offset: -3px;
+  }
+  .absent {
+    background: transparent !important; color: var(--muted) !important; box-shadow: inset 0 0 0 1px var(--grid) !important;
+    opacity: 0.6; text-decoration: line-through; text-decoration-thickness: 2px;
+  }
+  .correct::after, .present::after, .absent::after { position: absolute; top: 3px; right: 5px; font: 600 0.6rem/1 var(--mono); }
+  .correct::after { content: "\25CF"; color: var(--ground); }
+  .present::after { content: "\25CB"; color: var(--near); }
+  .absent::after { content: "\00D7"; color: var(--muted); font-size: 0.85rem; }
+  .abc .correct::after, .abc .present::after, .abc .absent::after,
+  .legend .sw::after { top: 2px; right: 2px; font-size: 0.6rem; }
+  .abc .absent::after, .legend .sw.absent::after { font-size: 0.75rem; }
+  .legend .sw.absent { opacity: 0.8; box-shadow: inset 0 0 0 1px var(--muted) !important; }
+  .legend {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px;
+    margin: 12px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 0.72rem;
+  }
+  .legend li { display: flex; align-items: center; gap: 6px; }
+  .legend .sw { position: relative; width: 18px; height: 18px; border-radius: 3px; display: inline-block; text-decoration: none; }
+  .msg { min-height: 1.5em; margin: 12px 0 0; text-align: center; color: var(--muted); font-size: 0.85rem; }
+  .msg.bad { color: var(--danger); }
+  .msg.hint { color: var(--food); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (max-width: 400px) { .abc { gap: 3px; } .abc button { font-size: 0.7rem; padding: 6px 0 8px; } }
+  @media (prefers-reduced-motion: reduce) { .row.shake { animation: none; } .t { transition: none; } }
+</style>
+
+<div class="cab">
+  <h1><span class="w">Word</span> <span class="g">Guess</span></h1>
+  <p class="rule">Find the hidden five-letter word in seven guesses. A solid tile with a dot means the letter is in the right spot, a dashed outline with a ring means it is in the word but in a different spot, and a faded tile with a cross means it is not in the word at all.</p>
+
+  <div class="hud">
+    <div class="stat"><span class="k">Streak</span><span class="v" id="streak">0</span></div>
+    <div class="stat"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="stat"><span class="k">Guesses left</span><span class="v" id="left">7</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button class="ghost" id="hintb" type="button" tabindex="-1" title="Reveal one letter of the word. You get one hint per word.">Show a hint <kbd>?</kbd></button>
+      <button class="ghost" id="delb" type="button" tabindex="-1" aria-label="Delete the last letter">Delete</button>
+      <button id="subb" type="button" tabindex="-1" aria-label="Submit your guess">Submit</button>
+    </div>
+    <div class="abc" id="abc" role="group" aria-label="Letter tracker. Each letter shows what you have learned about it so far."></div>
+    <div class="board" id="board" tabindex="0" role="group" aria-label="Guess grid. Type a five-letter word and press Enter to submit it."></div>
+    <p class="msg" id="msg"></p>
+    <ul class="legend" aria-hidden="true">
+      <li><span class="sw correct"></span>Right spot</li>
+      <li><span class="sw present"></span>In the word, elsewhere</li>
+      <li><span class="sw absent"></span>Not in the word</li>
+    </ul>
+
+    <div class="overlay" id="ov">
+      <h2 id="ovt">Ready to play?</h2>
+      <p id="ovp">Type a five-letter word and press Enter to make a guess. If you get stuck, press ? to reveal one letter, once per word.</p>
+      <button id="go" type="button">Start game</button>
+    </div>
+  </div>
+
+  <p class="sr" id="live" aria-live="polite"></p>
+  <p class="keys">Type letters to fill in a row, press <kbd>Backspace</kbd> to delete a letter, press <kbd>Enter</kbd> to submit your guess or start the next word, and press <kbd>?</kbd> for a hint. Press <kbd>Esc</kbd> (or <kbd>Alt+Shift+H</kbd>) to go back to all games.</p>
+  <a class="back" href="index.html">← Back to all games</a>
+</div>
+
+<script src="arcade.js"></script>
+<script>
+(() => {
+  const LEN = 5, TRIES = 7, KEY = 'wordGuessBest';
+
+  // Answers: common words only. Guesses may also be any word in EXTRA.
+  const ANSWERS = `
+    about above actor acute admit adopt adult after again agent agree ahead alarm album alert alike alive allow alone along
+    alter amber angel anger angle angry ankle apple apply arena argue arise armor arrow aside asset audio avoid awake award
+    aware awful bacon badge baker basic basin beach beard beast begin being below bench berry birth black blade blame blank
+    blast blaze bleak blend bless blind block blond blood bloom board boast bonus boost booth brain brake brand brass brave
+    bread break breed brick bride brief bring brisk broad broke brook broom brown brush build built bunch burst cabin cable
+    camel canal candy cargo carry catch cause cedar chain chair chalk charm chart chase cheap check cheek cheer chess chest
+    chief child chill choir chose civic civil claim class clean clear clerk click cliff climb clock close cloth cloud coach
+    coast color coral couch count court cover crack craft crane crash crawl crazy cream creek crime crisp cross crowd crown
+    crude cruel crush curve cycle daily dairy dance death debut delay dense depth diary dirty doubt dough draft drain drama
+    dream dress drink drive eager eagle early earth eight elbow elder empty enemy enjoy enter entry equal error essay event
+    every exact exist extra faint faith false fancy feast fence fever fiber field fifth fifty fight final flame flash fleet
+    flesh float flock flood floor flour fluid flute focus force forge forth forum found frame fresh front frost fruit fully
+    funny ghost giant given glass globe glory glove grace grade grain grand grant grape grass grave great green greet grief
+    grill gross group grove guard guess guest guide habit happy harsh heart heavy hedge hello hobby honey honor horse hotel
+    house human humor hurry ideal image index inner input issue ivory jelly jewel joint judge juice knife knock label labor
+    large laser later laugh layer learn lease least leave legal lemon level light limit linen liver local logic loose lover
+    lower loyal lucky lunar lunch magic major maker mango maple march match mayor medal media melon mercy merit metal meter
+    minor model money month moral motor mount mouse mouth movie music naval nerve never night noble noise north novel nurse
+    ocean offer often olive onion opera orbit order organ other outer owner paint panel panic paper party pasta patch peace
+    peach pearl pedal penny phase phone photo piano piece pilot pitch pizza place plain plane plant plate plaza point polar
+    porch pound power press price pride prime print prize proof proud prove pulse punch pupil queen quick quiet quilt quote
+    radio raise ranch range rapid ratio reach ready realm rebel relax reply rhyme rider ridge rifle right rigid river roast
+    robot rocky rough round route royal rural salad sauce scale scare scene scent scope score scout screw sense serve seven
+    shade shake shape share shark sharp sheep sheet shelf shell shift shine shirt shock shore short shout sight silly since
+    skill skirt slate sleep slice slide slope small smart smile smoke snack snake solar solid solve sound south space spare
+    spark speak speed spend spice spine spoon sport spray squad stack staff stage stair stake stamp stand start state steam
+    steel steep stick still stone stool storm story stove straw strip study style sugar suite sunny super sweet swift swing
+    sword table taste teach teeth thank theme thick thief thing think third thorn three throw thumb tiger tight timer title
+    toast today token tooth topic torch total touch tough tower toxic trace track trade trail train trait treat trend trial
+    tribe trick truck truly trust truth tulip twist uncle under union unity until upper upset urban usual valid value vapor
+    vault verse video viral virus visit vital vivid vocal voice voter wagon waste watch water whale wheat wheel while white
+    whole width witch woman world worry worth wound wrist write wrong yacht yield young youth zebra
+  `.trim().split(/\s+/);
+
+  const EXTRA = `
+    aback abase abate abbey abbot abhor abide abode abort abuse abyss acorn acrid acted added adage adept admin adobe adore
+    adorn affix afoot afoul agape agate agile aging aglow agony aimed aisle alias alibi alien align alley allot alloy aloft
+    aloof aloud alpha altar amass amaze amble amend amiss among ample amply amuse angst anime annex annoy annul antic anvil
+    aorta apart aphid apron aptly arbor ardor armed aroma arson ascot ashen asked askew assay atoll atone attic audit auger
+    avail avert avian await awash axial axiom azure bagel baggy baked balmy banal banjo barge baron based basil batch bathe
+    baton batty bayou beady beefy beget beige belch belie belly beret berth beset bevel bible bicep bilge bingo biome birch
+    birds bison blare bland bleat bleed bleep blimp blink bliss blitz bloat blown blues bluff blunt blurb blurt blush boats
+    bogus bossy botch bough bound bowel boxer boxes brace braid brawl brawn briar bribe brine brink briny broil brood broth
+    brunt brute buddy budge buggy bugle bulge bulky bully bumpy bunny burly burnt bushy butte buyer bylaw cacao cache cadet
+    cakes caper carat cards cared carol carve caste cater caulk cease chafe chaff chant chaos chard cheat chewy chick chide
+    chili chime chirp chock choke chord chore chunk churn cider cigar cinch circa clack clamp clang clank clash clasp cleat
+    cleft cling cloak clone clout clove clown cluck clump clung coats cobra cocoa colon comet comic comma conch condo copse
+    corny cough could coupe coven covet cramp crank crate crave craze creak creed creep crepe crept cress crest cried crier
+    crimp croak crock crone crony crook croon crumb crust crypt cubic cumin cupid curio curly curry curse cyber cynic daddy
+    daisy dally dandy dated datum daunt dealt debit debug decal decay decor decoy decry deity delta delve demon demur denim
+    depot derby deter detox deuce devil diner dingo dingy dirge disco ditch ditto ditty diver dizzy dodge dodgy doing dolly
+    donor donut doors dopey dowdy dowel downy dowry dozen drake drank drape drawl drawn dread dried drier drift drill droll
+    drone drool droop dross drove drown druid drums drunk dryer dryly ducks duchy dully dummy dumpy dunce dusky dusty duvet
+    dwarf dwell dwelt dying eased eaten eater ebony edict edify eerie egret eject elate elect elegy elfin elide elite elope
+    elude email embed ember emcee enact ended endow ennui ensue envoy epoch epoxy equip erase erect erode erupt ether ethic
+    ethos evade evict evoke exalt excel exert exile expel extol exult fable facet faced fairy faker farce farms fatal fatty
+    fault fauna favor feign femur feral ferry fetal fetch fetid fiend fiery filed filly filmy filth finch fires first fishy
+    fixed fixer fizzy fjord flags flail flair flake flaky flank flare flask fleck flick flier fling flint flirt floss flown
+    fluff fluke flung flunk flush foamy focal foggy folly foods foray forgo forte forty foyer frail frank fraud freak freed
+    freer friar fried frill frisk frock frogs frond froze fudge fugue fungi funky furor furry fussy fuzzy gaily gamer games
+    gamma gamut gassy gaudy gauge gaunt gauze gavel gawky gecko geese genie genre ghoul gifts girls girth glade glare glaze
+    gleam glean glide glint gloat gloom gloss glyph gnash gnome goals godly going golem golly goner goody gooey goofy goose
+    gorge gouge gourd grail grasp grate gravy graze greed grime grimy grind gripe groan groin groom grope grout growl grown
+    gruel gruff grunt guava guild guile guilt guise gulch gully gumbo gummy guppy gusto gusty hairy halve hands handy hardy
+    harpy haste hasty hatch hated hater haunt haven havoc hazel heads heady heard heath heave hefty heist helix hence heron
+    hills hilly hinge hippo hitch hoard hoist holly homer homes hoped hopes horde hound hours hovel hover howdy humid humph
+    hunky husky hutch hydro hyena hyper icily icing ideas idiom idler igloo imply inane inbox incur inept inert infer ingot
+    inlay inlet inter intro ionic irate irony islet itchy items jaunt jazzy jerky jetty jiffy joker jolly joust jumbo jumpy
+    juror kappa karma kayak kebab khaki kings kiosk kitty knack knave knead kneel knelt knoll koala krill ladle lager lakes
+    lamps lance lands lanky lapel lapse larva lasso latch latte leafy leaky leant leapt ledge leech leery lefty leggy lemur
+    libel liege liked lilac limbo liner lines lingo lions lipid lists lithe lived livid llama loamy loath lobby lofty lodge
+    lolly loopy lorry lotus louse lousy lowly lucid lumen lumpy lunge lurch lurid lusty lying lymph lyric macaw macho madam
+    madly mafia mambo manga mange mania manic manly manor masks maxim maybe meals mealy meant meaty melee merge merry messy
+    metro midge midst might miles milky mimic mince minds miner minus mirth miser mocha modal modem mogul moist molar moldy
+    moody moose morph mossy motel motif motto mound mourn mousy moved mover moves mower mucky mucus muddy mulch mummy munch
+    mural murky mushy musky musty myrrh nadir naive named names nanny nasal nasty natal navel needy neigh nerdy nests newer
+    newly nicer niche niece ninja ninth nobly nomad noose notch noted notes nudge nutty nylon nymph oaken oasis occur oddly
+    offal omega onset opine optic orate ought ounce outdo ovary overt owing owned oxide ozone paddy pagan pages pairs paler
+    pansy papal parka parks parry parse parts pasty patio patty pause paved payee payer pears pecan peeve penal peony perch
+    peril perky pesky pesto petal petty phony piety piggy piled pinch pinky pinto piper pique pixel pixie plaid plank plans
+    plays plead pleat plied pluck plumb plume plump plunk plush poems poise poker poked polka polyp pooch pools poppy posse
+    pouch pouty prank prawn preen pried prism privy probe prone prong prose prowl proxy prude prune psalm pudgy puffy pulpy
+    puree purge purse pushy putty quack quail quake qualm quart quash quasi query quest queue quill quirk quota rabbi rabid
+    raced racer radar radii rainy rally ramen rangy raspy rated ratty raven rayon razor rearm rebar rebus rebut recap recur
+    reedy refer refit regal rehab reign relay relic remit renal renew repay repel rerun reset resin retch retro retry reuse
+    revel revue rhino riled rings rinse ripen riper risen riser risky rival rivet roach roads robin rocks rodeo rogue roles
+    roofs rooms roomy roost roots roses rotor rouge rowdy rower ruddy ruder rugby ruled ruler rules rumba rumor rupee rusty
+    sadly safer saint sales salon salsa salty salve salvo sandy saner sappy sassy satin saucy sauna saute saved savor savvy
+    scald scalp scaly scamp scant scarf scary scoff scold scone scoop scorn scour scowl scram scrap scrub scrum seats sedan
+    seeds seedy segue seize sepia serum setup sever shack shaft shaky shale shall shame shank shawl shear sheen shied shiny
+    ships shire shirk shoal shoes shone shook shops shorn shove shown showy shrew shrub shrug shuck shunt shush shyly sides
+    siege sieve sigma signs silky silty sinew singe siren sites sixth sixty skate skier skiff skies skimp skulk skull skunk
+    slack slain slang slant slash sleek sleet slept slick slime slimy sling slink sloop slosh sloth slump slung slunk slurp
+    slush slyly smack smash smear smell smelt smirk smite smith smock snail snare snarl sneak sneer snide sniff snipe snoop
+    snore snort snout snowy snuck snuff soapy sober socks soggy sonar songs sonic sooth sooty sorry souls spade spank spasm
+    spawn spear speck spelt spent spied spiel spike spiky spill spilt spite splat split spoil spoke spoof spook spool spore
+    spout spree sprig spunk spurn spurt squat squib stain stale stalk stall stank stare stark stars stash stave stead steak
+    steal stein steps stern stiff sting stink stint stock stoic stoke stole stomp stony stood stoop stout strap stray strut
+    stuck stuff stump stung stunk stunt suave sulky sully sumac surer surge surly sushi swami swamp swarm swash swath swear
+    sweat sweep swell swept swill swine swirl swoon swoop synod syrup tabby taboo tacit tacky taffy taint taken tales talon
+    tamer tango tangy taper tapir tardy tarot tasks taunt tawny teams teary tease teddy teeny tempo tenet tenor tense tenth
+    tepid terra terse testy tests texts theft their there these those threw thyme tiara tibia tidal tilde timed timid tipsy
+    tired titan tithe toddy tonal toned tonic tools topaz torso totem tours towns toxin tramp trash trawl tread trees tress
+    triad tried tripe trips trite troll troop trope trout trove truce truer trump trunk truss tryst tuber tummy tumor tunic
+    turbo tutor twang tweak tweed tweet twice twine twirl tying udder ulcer ultra umbra unbox uncut undue unfit unify units
+    unlit unmet untie unzip upend usage usher usurp utter vague valet valor valve vegan venom venue verge verve views vigil
+    vigor villa vinyl viola viper visor vista vodka vogue vomit voted vouch vowel wacky wafer wager waist waive walls waltz
+    wants warty waved weary weave wedge weedy weigh weird whack wharf where which whiff whine whiny whirl whisk whoop widen
+    widow wield wimpy wince winch windy wings wiped wires wiser wispy witty woken women woody woozy words wordy works worse
+    worst would wrack wrath wreak wreck wrest wring wrote wrung wryly yards yearn years yeast yummy zesty zonal zones
+  `.trim().split(/\s+/);
+
+  const ALLOWED = new Set([...ANSWERS, ...EXTRA]);
+  const RANK = { absent: 1, present: 2, correct: 3 };
+
+  const $ = id => document.getElementById(id);
+  const board = $('board');
+
+  let bag = [], streak = 0, best = Arcade.best(KEY);
+  $('best').textContent = best;
+
+  // Daily mode (?daily): one word for everyone today, picked with the daily rng.
+  // It never touches the regular streak or best.
+  const daily = Arcade.daily('word-guess');
+  const dailyAnswer = daily ? Arcade.pick(ANSWERS, daily.rng) : null;
+  const dailySummary = r => {
+    const word = dailyAnswer.toUpperCase();
+    return r.solved
+      ? `You found today’s word, ${word}, in ${r.guesses} ${r.guesses === 1 ? 'guess' : 'guesses'}${r.hintUsed ? ' with the help of a hint' : ''}.`
+      : `You didn’t find today’s word. It was ${word}.`;
+  };
+  function proceed() {
+    if (daily && daily.result) location.href = 'word-guess.html';
+    else newRound();
+  }
+  if (daily) {
+    const when = new Date(`${daily.date}T00:00:00`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    document.title = 'Daily Word Guess';
+    document.querySelector('h1').innerHTML = '<span class="w">Daily Word</span> <span class="g">Guess</span>';
+    document.querySelector('.rule').textContent = `This is the daily puzzle for ${when}. Find the hidden five-letter word in seven guesses. A solid tile with a dot means the letter is in the right spot, a dashed outline with a ring means it is in the word but in a different spot, and a faded tile with a cross means it is not in the word at all.`;
+    $('streak').previousElementSibling.textContent = 'Puzzle';
+    $('streak').textContent = 'Daily';
+    $('best').previousElementSibling.textContent = 'Hint';
+    $('best').textContent = 'Unused';
+    if (daily.result) {
+      $('ovt').textContent = 'Already played today';
+      $('ovp').textContent = `${dailySummary(daily.result)} Come back tomorrow for a new word.`;
+      $('go').textContent = 'Play the regular game';
+    } else {
+      $('ovp').textContent = 'Everyone gets the same word today, and you get one try at it. Type a five-letter word and press Enter to make a guess. If you get stuck, press ? to reveal one letter.';
+    }
+  }
+
+  // Build the empty grid once.
+  const tiles = [];
+  for (let r = 0; r < TRIES; r++) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    tiles.push([]);
+    for (let c = 0; c < LEN; c++) {
+      const t = document.createElement('div');
+      t.className = 't';
+      row.append(t);
+      tiles[r].push(t);
+    }
+    board.append(row);
+  }
+  // Alphabet tracker: A to Z in order, two rows of 13. Clicking a letter types it.
+  const keyEls = {};
+  for (const ch of 'abcdefghijklmnopqrstuvwxyz') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.tabIndex = -1; // the physical keyboard is the primary input; keep these out of the tab order
+    b.textContent = ch;
+    b.setAttribute('aria-label', ch.toUpperCase());
+    b.addEventListener('click', () => { b.blur(); press(ch); board.focus(); });
+    keyEls[ch] = b;
+    $('abc').append(b);
+  }
+  const STATE_WORDS = { correct: 'in the right spot', present: 'in the word but in a different spot', absent: 'not in the word' };
+
+  let s; // round state
+  function nextWord() {
+    if (daily) return dailyAnswer;
+    if (!bag.length) bag = Arcade.shuffle(ANSWERS);
+    return bag.pop();
+  }
+
+  function newRound() {
+    s = { answer: nextWord(), row: 0, cur: '', state: 'play', hint: null, known: Array(LEN).fill(false) };
+    tiles.flat().forEach(t => { t.className = 't'; t.textContent = ''; });
+    Object.entries(keyEls).forEach(([ch, b]) => { b.classList.remove('correct', 'present', 'absent'); b.setAttribute('aria-label', ch.toUpperCase()); });
+    $('hintb').disabled = false;
+    $('left').textContent = TRIES;
+    say('');
+    $('ov').hidden = true;
+    board.focus();
+  }
+
+  function say(text, cls = '') {
+    $('msg').textContent = text;
+    $('msg').className = 'msg' + (cls ? ' ' + cls : '');
+    $('live').textContent = text;
+  }
+
+  // Two-pass scoring so duplicate letters are marked correctly.
+  function score(guess, ans) {
+    const res = Array(LEN).fill('absent'), left = {};
+    for (let i = 0; i < LEN; i++) {
+      if (guess[i] === ans[i]) res[i] = 'correct';
+      else left[ans[i]] = (left[ans[i]] || 0) + 1;
+    }
+    for (let i = 0; i < LEN; i++) {
+      if (res[i] !== 'correct' && left[guess[i]]) { res[i] = 'present'; left[guess[i]]--; }
+    }
+    return res;
+  }
+
+  function drawRow() {
+    tiles[s.row].forEach((t, i) => {
+      t.textContent = s.cur[i] || '';
+      t.classList.toggle('filled', i < s.cur.length);
+    });
+  }
+
+  function shake() {
+    const row = board.children[s.row];
+    row.classList.remove('shake');
+    void row.offsetWidth; // restart the animation
+    row.classList.add('shake');
+  }
+
+  function submit() {
+    if (s.cur.length < LEN) { shake(); return say('Your guess needs five letters.', 'bad'); }
+    if (!ALLOWED.has(s.cur)) { shake(); return say("That word isn’t in the list.", 'bad'); }
+
+    const guess = s.cur, res = score(guess, s.answer);
+    res.forEach((r, i) => {
+      tiles[s.row][i].classList.remove('filled');
+      tiles[s.row][i].classList.add(r);
+      const k = keyEls[guess[i]];
+      const was = ['correct', 'present', 'absent'].find(c => k.classList.contains(c));
+      if (!was || RANK[r] > RANK[was]) { k.classList.remove('correct', 'present', 'absent'); k.classList.add(r); k.setAttribute('aria-label', `${guess[i].toUpperCase()}, ${STATE_WORDS[r]}`); }
+      if (r === 'correct') s.known[i] = true;
+    });
+    const spoken = res.map((r, i) => `${guess[i].toUpperCase()} ${r === 'correct' ? 'is in the right spot' : r === 'present' ? 'is in the word but in a different spot' : 'is not in the word'}`).join(', ');
+
+    s.row++; s.cur = '';
+    $('left').textContent = TRIES - s.row;
+
+    if (guess === s.answer) return finish(true);
+    if (s.row === TRIES) return finish(false);
+    say('');
+    $('live').textContent = `Guess ${s.row}, ${guess.toUpperCase()}: ${spoken}.`;
+  }
+
+  function finish(won) {
+    s.state = 'over';
+    const word = s.answer.toUpperCase();
+    if (daily) {
+      const r = { solved: won, guesses: s.row, hintUsed: s.hint !== null };
+      daily.finish(r);
+      daily.result = r;
+      $('ovt').textContent = won ? 'You got it!' : 'Out of guesses';
+      $('ovp').textContent = `${dailySummary(r)} Come back tomorrow for a new word.`;
+      $('go').textContent = 'Play the regular game';
+      $('live').textContent = `${$('ovt').textContent} ${$('ovp').textContent} Press Enter to play the regular game.`;
+      $('ov').hidden = false;
+      $('go').focus();
+      return;
+    }
+    if (won) {
+      streak++;
+      best = Arcade.record(KEY, streak);
+      $('ovt').textContent = 'You got it!';
+      $('ovp').textContent = `You found ${word} in ${s.row} ${s.row === 1 ? 'guess' : 'guesses'}. Your streak is now ${streak}.${s.hint !== null ? ' You used a hint on this word.' : ''}`;
+      $('go').textContent = 'Next word';
+    } else {
+      streak = 0;
+      $('ovt').textContent = 'Out of guesses';
+      $('ovp').textContent = `The word was ${word}. Your streak has been reset.${best > 0 ? ` Your best streak is ${best}.` : ''}`;
+      $('go').textContent = 'Try another word';
+    }
+    $('streak').textContent = streak;
+    $('best').textContent = best;
+    const head = $('ovt').textContent;
+    $('live').textContent = `${head}${/[.!?]$/.test(head) ? '' : '.'} ${$('ovp').textContent} Press Enter to play the next word.`;
+    $('ov').hidden = false;
+    $('go').focus();
+  }
+
+  // One hint per word: reveal a letter position not yet found.
+  function hint() {
+    if (s.hint !== null) return say("You’ve already used your hint for this word.", 'bad');
+    const open = s.known.map((k, i) => k ? -1 : i).filter(i => i >= 0);
+    if (!open.length) return;
+    const i = Arcade.pick(open);
+    s.hint = i;
+    if (daily) $('best').textContent = 'Used';
+    $('hintb').disabled = true;
+    say(`Hint: letter ${i + 1} is ${s.answer[i].toUpperCase()}.`, 'hint');
+  }
+
+  function press(k) {
+    if (!s || s.state !== 'play') { if (k === 'Enter') proceed(); return; }
+    if (k === 'Enter') submit();
+    else if (k === 'Backspace') { s.cur = s.cur.slice(0, -1); drawRow(); }
+    else if (k === '?') hint();
+    else if (/^[a-z]$/.test(k) && s.cur.length < LEN) { s.cur += k; drawRow(); if ($('msg').classList.contains('bad')) say(''); }
+  }
+
+  addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || e.repeat && e.key === 'Enter') return;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (k === 'Enter' || k === 'Backspace' || k === '?' || /^[a-z]$/.test(k)) {
+      // preventDefault also stops a focused button from firing its own click on Enter.
+      e.preventDefault();
+      press(k);
+    }
+  });
+  $('go').addEventListener('click', () => { if (!s || s.state !== 'play') proceed(); });
+  $('delb').addEventListener('click', () => { $('delb').blur(); if (s && s.state === 'play') press('Backspace'); board.focus(); });
+  $('subb').addEventListener('click', () => { $('subb').blur(); if (s && s.state === 'play') press('Enter'); board.focus(); });
+  $('hintb').addEventListener('click', () => { $('hintb').blur(); if (s && s.state === 'play') hint(); board.focus(); });
+
+  $('go').focus();
+})();
+</script>
