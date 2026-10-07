@@ -29,16 +29,21 @@ window.Arcade = (() => {
 
   // On touch screens, swap keyboard instructions (any .keys line with <kbd> in it) for the tap
   // instructions in its data-touch attribute. An empty data-touch hides the line.
+  // Other elements with a data-touch attribute (start-screen text, for example) switch the same way.
+  // This runs right away, because arcade.js loads after the page markup and before the game's own
+  // script, so a game can still overwrite the text afterwards.
   const touch = matchMedia('(hover: none) and (pointer: coarse)').matches;
+  const applyTouch = () => document.querySelectorAll('.keys, [data-touch]').forEach(el => {
+    if (el.dataset.touchDone) return;
+    if (el.classList.contains('keys') && !el.querySelector('kbd')) return;
+    el.dataset.touchDone = '1';
+    const text = el.dataset.touch ?? 'Tap the buttons on screen to play, and tap a text box when you need to type.';
+    if (text) el.textContent = text; else el.hidden = true;
+  });
   if (touch) {
     document.documentElement.classList.add('touch');
-    addEventListener('DOMContentLoaded', () => {
-      document.querySelectorAll('.keys').forEach(p => {
-        if (!p.querySelector('kbd')) return;
-        const text = p.dataset.touch ?? 'Tap the buttons on screen to play, and tap a text box when you need to type.';
-        if (text) p.textContent = text; else p.hidden = true;
-      });
-    });
+    applyTouch();
+    addEventListener('DOMContentLoaded', applyTouch);
   }
 
   // Seeded randomness, so daily puzzles are the same for everyone on the same date.
@@ -99,5 +104,7 @@ window.Arcade = (() => {
     dailyResult: (game, date = dateKey()) => readJSON(`daily:${game}:${date}`),
     dailyStreak,
     touch,
+    // Picks the keyboard or the touch-screen wording for a message.
+    t: (keyboard, tap) => touch ? tap : keyboard,
   };
 })();

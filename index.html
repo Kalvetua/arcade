@@ -265,7 +265,7 @@
     tabs.forEach(t => t.setAttribute('aria-selected', false));
     const hits = GAMES.filter(g => !g.daily && (g.title + ' ' + g.blurb + ' ' + SECTIONS.find(s => s.id === g.s).name).toLowerCase().includes(query));
     $('about').textContent = hits.length
-      ? `${hits.length} ${hits.length === 1 ? 'game matches' : 'games match'} your search. Press ↓ to move into the results.`
+      ? `${hits.length} ${hits.length === 1 ? 'game matches' : 'games match'} your search. ${Arcade.t('Press ↓ to move into the results.', 'Tap one to play it.')}`
       : 'No games match that search. Try a different word, or clear the search to browse by section.';
     render(hits);
   }

@@ -61,10 +61,11 @@
       <button id="hint" type="button" class="ghost">Hint <kbd>↑</kbd></button>
     </form>
     <p id="fb" aria-live="polite"></p>
+    <button id="nextc" type="button" hidden>Next country</button>
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">A country’s outline is drawn over 12 seconds. Type its name and press Enter, and the sooner you answer, the more points you earn.</p>
+      <p id="ovp" data-touch="A country’s outline is drawn over 12 seconds. Type its name and tap Enter on your keyboard, and the sooner you answer, the more points you earn.">A country’s outline is drawn over 12 seconds. Type its name and press Enter, and the sooner you answer, the more points you earn.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -173,6 +174,7 @@
     s.cur = s.queue.shift();
     s.n++;
     s.hinted = false;
+    $('nextc').hidden = true;
     $('num').textContent = `Country ${s.n}`;
     $('name').textContent = '';
     shape.setAttribute('d', s.cur.d);
@@ -257,7 +259,10 @@
       s.lives--;
       msg = `${kind === 'skip' ? 'You skipped this one.' : 'Time’s up.'} ${facts.replace('It is', 'It was')}`;
     }
-    msg += s.lives > 0 ? ' Press Enter for the next country.' : ' Press Enter to see your result.';
+    msg += s.lives > 0 ? Arcade.t(' Press Enter for the next country.', ' Tap Next country to continue.')
+                       : Arcade.t(' Press Enter to see your result.', ' Tap See your result.');
+    $('nextc').textContent = s.lives > 0 ? 'Next country' : 'See your result';
+    $('nextc').hidden = false;
     say(msg, kind === 'right' ? 'right' : 'wrong');
     hud();
   }
@@ -269,6 +274,7 @@
   }
 
   function over(cleared) {
+    $('nextc').hidden = true;
     s.state = 'over';
     cancelAnimationFrame(s.raf);
     input.readOnly = true;
@@ -297,6 +303,7 @@
   });
   $('form').addEventListener('submit', e => { e.preventDefault(); });
   $('hint').addEventListener('click', hint);
+  $('nextc').addEventListener('click', advance);
   $('go').addEventListener('click', start);
   $('go').focus();
 })();

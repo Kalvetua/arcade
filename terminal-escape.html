@@ -1375,7 +1375,7 @@ Type hint for a clue about this level, and type submit followed by the code when
       const n = Math.min(b + 1, N);
       const done = b >= N ? `You have completed all ${N} levels.` : `You have completed ${b} of ${N} levels.`;
       brief(n - 1); lvl = n - 1; hud();
-      showOverlay('Ready to play?', `Welcome back! ${done} Press Enter to continue from level ${n}, or start over from level 1.`, `Continue from level ${n}`, () => startLevel(n - 1), 'Start from level 1', () => startLevel(0));
+      showOverlay('Ready to play?', Arcade.t(`Welcome back! ${done} Press Enter to continue from level ${n}, or start over from level 1.`, `Welcome back! ${done} Continue from level ${n}, or start over from level 1.`), `Continue from level ${n}`, () => startLevel(n - 1), 'Start from level 1', () => startLevel(0));
     } else {
       brief(0); hud();
       showOverlay('Ready to play?', 'Type real Linux commands into the terminal to find the hidden code in each level. Every level teaches one new skill, and you can type hint whenever you get stuck.', 'Start game', () => startLevel(0));

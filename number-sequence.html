@@ -65,7 +65,7 @@
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Type the next number in each sequence and press Enter. You have 30 seconds for each puzzle, and the game ends after three mistakes.</p>
+      <p id="ovp" data-touch="Type the next number in each sequence and tap Check answer. You have 30 seconds for each puzzle, and the game ends after three mistakes.">Type the next number in each sequence and press Enter. You have 30 seconds for each puzzle, and the game ends after three mistakes.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -384,7 +384,7 @@ function makeGen(rand) {
       $('ovp').textContent = `${dailySummary(daily.result)} Come back tomorrow for a new set of puzzles.`;
       $('go').textContent = 'Play the regular game';
     } else {
-      $('ovp').textContent = 'Everyone gets the same five puzzles today. Type the next number in each sequence and press Enter. You have 30 seconds for each one, and you play all five even if you miss some.';
+      $('ovp').textContent = 'Everyone gets the same five puzzles today. Type the next number in each sequence and ' + Arcade.t('press Enter', 'tap Check answer') + '. You have 30 seconds for each one, and you play all five even if you miss some.';
     }
   }
 

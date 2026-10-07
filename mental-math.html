@@ -86,7 +86,7 @@
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Watch the numbers and operations go by, keeping a running total in your head, then type the final result and press Enter. You have three lives.</p>
+      <p id="ovp" data-touch="Watch the numbers and operations go by, keeping a running total in your head, then type the final result and tap Check answer. You have three lives.">Watch the numbers and operations go by, keeping a running total in your head, then type the final result and press Enter. You have three lives.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -204,7 +204,7 @@ function makeChain(level, rand) {
     $('prog').textContent = 'Your answer';
     const fb = $('fb');
     fb.className = 'fb';
-    fb.textContent = 'The chain is done. Type the final result and press Enter.';
+    fb.textContent = Arcade.t('The chain is done. Type the final result and press Enter.', 'The chain is done. Type the final result and tap Check answer.');
     $('ans').focus();
   }
 

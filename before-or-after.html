@@ -72,7 +72,7 @@
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Each new event appears in the timeline without its year. Move it up or down with the arrow keys and press Enter to place it.</p>
+      <p id="ovp" data-touch="Each new event appears in the timeline without its year. Tap Earlier or Later to move it, then tap Place it here.">Each new event appears in the timeline without its year. Move it up or down with the arrow keys and press Enter to place it.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -444,7 +444,7 @@
       $('ovp').textContent = `${dailyLine(daily.result)} Come back tomorrow for a new set of events.`;
       $('go').textContent = 'Play the regular game';
     } else {
-      $('ovp').textContent = 'Everyone gets the same ten events today. Move each new event with the arrow keys and press Enter to place it. You have three lives.';
+      $('ovp').textContent = Arcade.t('Everyone gets the same ten events today. Move each new event with the arrow keys and press Enter to place it. You have three lives.', 'Everyone gets the same ten events today. Tap Earlier or Later to move each new event, then tap Place it here. You have three lives.');
     }
   }
 

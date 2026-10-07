@@ -1251,7 +1251,7 @@ const GitSim = (() => {
     $('gt').textContent = `Level ${s.lv + 1} complete!`;
     const last = s.lv + 1 >= N;
     $('gbody').innerHTML = `<p>You solved it with ${plural(s.cmds, 'command')}.</p><p class="lesson">${L.lesson}</p><div class="row"><button id="next" type="button">${last ? 'Finish' : 'Next level'}</button></div>`;
-    print(`Level ${s.lv + 1} complete! Read the lesson above, then press Enter to continue.`, 'g');
+    print(Arcade.t(`Level ${s.lv + 1} complete! Read the lesson above, then press Enter to continue.`, `Level ${s.lv + 1} complete! Read the lesson above, then tap ${last ? 'Finish' : 'Next level'} to continue.`), 'g');
     cmd.disabled = true;
     $('next').addEventListener('click', next);
     $('next').focus();

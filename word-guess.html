@@ -103,7 +103,7 @@
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Type a five-letter word and press Enter to make a guess. If you get stuck, press ? to reveal one letter, once per word.</p>
+      <p id="ovp" data-touch="Tap letters to type a five-letter word, then tap Submit. If you get stuck, tap Show a hint to reveal one letter, once per word.">Type a five-letter word and press Enter to make a guess. If you get stuck, press ? to reveal one letter, once per word.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -269,7 +269,7 @@
       $('ovp').textContent = `${dailySummary(daily.result)} Come back tomorrow for a new word.`;
       $('go').textContent = 'Play the regular game';
     } else {
-      $('ovp').textContent = 'Everyone gets the same word today, and you get one try at it. Type a five-letter word and press Enter to make a guess. If you get stuck, press ? to reveal one letter.';
+      $('ovp').textContent = 'Everyone gets the same word today, and you get one try at it. ' + Arcade.t('Type a five-letter word and press Enter to make a guess. If you get stuck, press ? to reveal one letter.', 'Tap letters to type a five-letter word, then tap Submit. If you get stuck, tap Show a hint to reveal one letter.');
     }
   }
 

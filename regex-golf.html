@@ -22,6 +22,8 @@
   .entry { display: flex; align-items: center; gap: 4px; background: var(--ground); border-radius: 4px; box-shadow: inset 0 0 0 1px var(--grid); padding: 0 10px; }
   .entry:focus-within { outline: 3px solid var(--accent); outline-offset: 2px; }
   .entry span { color: var(--muted); }
+  .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .acts button { padding: 8px 14px; font-size: 0.85rem; }
   #re { flex: 1; min-width: 0; font: 600 1.05rem var(--mono); color: var(--ink); background: transparent; border: 0; padding: 10px 2px; outline: none; }
   #status { margin: 0; font-size: 0.8rem; color: var(--muted); min-height: 1.4em; }
   #status.err { color: var(--danger); }
@@ -55,6 +57,11 @@
     <div class="meta"><span id="title">Level 1</span><span id="par"></span></div>
     <p id="task">Your first level will appear here.</p>
     <label class="entry"><span aria-hidden="true">/</span><input id="re" type="text" maxlength="80" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Your regular expression" aria-describedby="status"><span aria-hidden="true">/</span></label>
+    <div class="acts">
+      <button id="sub" type="button">Submit</button>
+      <button id="hintb" type="button" class="ghost">Hint</button>
+      <button id="skipb" type="button" class="ghost">Skip level</button>
+    </div>
     <p id="status"></p>
     <p id="fb" aria-live="polite"></p>
     <div class="lists">
@@ -64,7 +71,7 @@
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Type a pattern and watch each word turn green when it is handled correctly. Press Enter to submit once every word is right.</p>
+      <p id="ovp" data-touch="Type a pattern and watch each word turn green when it is handled correctly. Tap Submit once every word is right.">Type a pattern and watch each word turn green when it is handled correctly. Press Enter to submit once every word is right.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -175,6 +182,7 @@
   const input = $('re');
 
   function hud() {
+    $('sub').textContent = s.state === 'solved' ? 'Next level' : 'Submit';
     $('lvl').textContent = `${s.i + 1} of ${LEVELS.length}`;
     $('total').textContent = total().toLocaleString('en-US');
     best = Arcade.record(KEY, total());
@@ -239,7 +247,7 @@
     [...$('no').children].forEach((li, k) => { const r = !test(L.no[k]); if (r) good++; mark(li, r ? 'ok' : 'bad', r ? '✓' : '✗'); li.setAttribute('aria-label', `${L.no[k]}, ${r ? 'correctly avoided' : 'wrongly matched'}`); });
     const n = items.length;
     s.ok = good === n;
-    st.textContent = `${good} of ${n} words are right. Your pattern is ${plural(p.len, 'character')} long, and par is ${par(L)}.` + (s.ok ? ' Press Enter to submit.' : '');
+    st.textContent = `${good} of ${n} words are right. Your pattern is ${plural(p.len, 'character')} long, and par is ${par(L)}.` + (s.ok ? Arcade.t(' Press Enter to submit.', ' Tap Submit.') : '');
   }
 
   function submit() {
@@ -255,7 +263,7 @@
     const cmp = len < p ? `${plural(p - len, 'character')} under par` : len > p ? `${plural(len - p, 'character')} over par` : 'exactly par';
     const tail = prev > pts ? ` Your best on this level is still ${plural(prev, 'point')}.` : '';
     fb.className = 'right';
-    fb.textContent = `Correct! +${plural(pts, 'point')}. Your pattern is ${plural(len, 'character')}, which is ${cmp}. One reference answer is ${L.ref}.${tail} Press Enter to continue.`;
+    fb.textContent = `Correct! +${plural(pts, 'point')}. Your pattern is ${plural(len, 'character')}, which is ${cmp}. One reference answer is ${L.ref}.${tail} ${Arcade.t('Press Enter to continue.', 'Tap Next level to continue.')}`;
     s.state = 'solved';
     hud();
   }
@@ -279,7 +287,7 @@
     showOverlay('Course complete', `You reached the last hole with a total of ${plural(t, 'point')} across ${plural(solved, 'solved level')}. ${t > prevBest ? 'That’s a new best!' : (best ? `Your best is ${best.toLocaleString('en-US')}.` : '')} Play again to improve your scores.`, 'Play again');
   }
 
-  input.addEventListener('input', () => { if (s.state === 'solved') s.state = 'play'; $('fb').textContent = ''; check(); });
+  input.addEventListener('input', () => { if (s.state === 'solved') s.state = 'play'; $('fb').textContent = ''; check(); hud(); });
   addEventListener('keydown', e => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (s.state === 'ready' || s.state === 'over') {
@@ -294,7 +302,7 @@
     }
     if (e.key === 'ArrowUp' && document.activeElement === input) {
       e.preventDefault();
-      $('fb').className = 'hint'; $('fb').textContent = `Hint: ${LEVELS[s.i].hint}`;
+      showHint();
       return;
     }
     if (e.key === 'Enter') {
@@ -303,6 +311,11 @@
       if (s.state !== 'over') input.focus();
     }
   });
+  function showHint() { $('fb').className = 'hint'; $('fb').textContent = `Hint: ${LEVELS[s.i].hint}`; }
+  const act = fn => () => { if (s.state === 'ready' || s.state === 'over') return; fn(); if (s.state !== 'over') input.focus(); };
+  $('sub').addEventListener('click', act(() => { if (s.state === 'solved') advance(); else submit(); }));
+  $('hintb').addEventListener('click', act(showHint));
+  $('skipb').addEventListener('click', act(() => { if (s.state === 'solved') advance(); else skip(); }));
   $('go').addEventListener('click', start);
   hud();
   $('go').focus();

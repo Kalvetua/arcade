@@ -68,12 +68,12 @@
     <div id="ex" hidden>
       <code id="canon"></code>
       <ul id="parts"></ul>
-      <div class="ex-row"><p id="nextHint">Press Enter to continue.</p><button id="next" type="button" class="ghost">Continue</button></div>
+      <div class="ex-row"><p id="nextHint" data-touch="Tap Continue when you are ready.">Press Enter to continue.</p><button id="next" type="button" class="ghost">Continue</button></div>
     </div>
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Press a number key to pick a deck, then press Enter. Type each command and press Enter to check it.</p>
+      <p id="ovp" data-touch="Tap a deck to pick it, then start the game. Type each command and tap Enter on your keyboard to check it.">Press a number key to pick a deck, then press Enter. Type each command and press Enter to check it.</p>
       <div class="choices" id="decks"></div>
       <button id="go" type="button">Start game</button>
     </div>
@@ -1021,7 +1021,7 @@
       ul.append(li);
     }
     const last = s.lives <= 0;
-    $('nextHint').textContent = last ? 'That was your last life. Press Enter to see your score.' : 'Press Enter to continue.';
+    $('nextHint').textContent = last ? Arcade.t('That was your last life. Press Enter to see your score.', 'That was your last life. Tap See your score.') : Arcade.t('Press Enter to continue.', 'Tap Continue when you are ready.');
     $('next').textContent = last ? 'See your score' : 'Continue';
     $('ex').hidden = false;
     hud();
@@ -1039,7 +1039,7 @@
     $('best').textContent = best.toLocaleString('en-US');
     const solved = s.n - LIVES;
     showOverlay('Game over',
-      `You scored ${plural(s.score, 'point', 'points')} with ${plural(solved, 'correct command', 'correct commands')}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${best.toLocaleString('en-US')}.` : '')} Pick a deck and press Enter to play again.`,
+      `You scored ${plural(s.score, 'point', 'points')} with ${plural(solved, 'correct command', 'correct commands')}. ${s.score > prev ? 'That’s a new best!' : (best ? `Your best is ${best.toLocaleString('en-US')}.` : '')} ${Arcade.t('Pick a deck and press Enter to play again.', 'Pick a deck and tap Play again.')}`,
       'Play again');
   }
 

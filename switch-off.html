@@ -73,7 +73,7 @@
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Move around the board with the arrow keys and press Space to flip a tile and its neighbors. Clear the board in as few moves as you can.</p>
+      <p id="ovp" data-touch="Tap a tile to flip it and its neighbors. Clear the board in as few moves as you can.">Move around the board with the arrow keys and press Space to flip a tile and its neighbors. Clear the board in as few moves as you can.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -247,7 +247,7 @@ function makePuzzle(level, rand) {
     s.hintTile = pick;
     render();
     const left = popcount(sol);
-    say(`Try pressing the tile in row ${Math.floor(pick / N) + 1}, column ${pick % N + 1}. From here, the board can be cleared in ${plural(left, 'more press', 'more presses')}. Each hint takes ${HINT_COST} points off this puzzle’s reward.`);
+    say(`${Arcade.t('Try pressing', 'Try tapping')} the tile in row ${Math.floor(pick / N) + 1}, column ${pick % N + 1}. From here, the board can be cleared in ${plural(left, 'more press', 'more presses')}. Each hint takes ${HINT_COST} points off this puzzle’s reward.`);
   }
 
   function press(i) {

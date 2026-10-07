@@ -75,7 +75,7 @@
 
     <div class="overlay" id="ov">
       <h2 id="ovt">Ready to play?</h2>
-      <p id="ovp">Move the cursor to the buggy line with the arrow keys and press Enter, then press a number key to choose what is wrong. You have 60 seconds for each snippet.</p>
+      <p id="ovp" data-touch="Tap the line with the bug, then tap the explanation that fits. You have 60 seconds for each snippet.">Move the cursor to the buggy line with the arrow keys and press Enter, then press a number key to choose what is wrong. You have 60 seconds for each snippet.</p>
       <button id="go" type="button">Start game</button>
     </div>
   </div>
@@ -165,7 +165,7 @@
     $('fb').textContent = ''; $('fb').className = '';
     $('why').textContent = '';
     $('next').hidden = true;
-    $('ask').textContent = 'Step 1: Which line contains the bug? Move with the arrow keys and press Enter to choose it.';
+    $('ask').textContent = Arcade.t('Step 1: Which line contains the bug? Move with the arrow keys and press Enter to choose it.', 'Step 1: Which line contains the bug? Tap it to choose it.');
     s.state = 'line';
     setCursor(0);
     $('code').focus();
@@ -201,7 +201,7 @@
     s.state = 'why';
     lineEls()[s.line].classList.add('bad');
     $('fb').textContent = `Yes, the bug is on line ${s.cur.bug}. Now choose what is wrong with it.`; $('fb').className = 'right';
-    $('ask').textContent = 'Step 2: What is wrong with this line? Press the number of the best explanation.';
+    $('ask').textContent = Arcade.t('Step 2: What is wrong with this line? Press the number of the best explanation.', 'Step 2: What is wrong with this line? Tap the best explanation.');
     s.opts = Arcade.shuffle(s.cur.why.map((t, i) => ({ t, ok: i === 0 })));
     const box = $('choices');
     s.opts.forEach((o, i) => {
