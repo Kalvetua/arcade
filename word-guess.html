@@ -3,7 +3,20 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Word Guess</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="stylesheet" href="arcade.css">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0d1f2a">
+<meta name="description" content="Find the hidden five-letter word in seven guesses, then keep going to build a winning streak.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Word Guess, in the Arcade">
+<meta property="og:description" content="Find the hidden five-letter word in seven guesses, then keep going to build a winning streak.">
+<meta property="og:url" content="https://kalvetua.github.io/arcade/word-guess.html">
+<meta property="og:image" content="https://kalvetua.github.io/arcade/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="arcade.css?v=2">
 <style>
   /* Layout: hint, delete and submit controls, then the A to Z letter tracker, then the guess grid.
      Feedback never relies on color alone: every scored tile also carries a marker
@@ -113,7 +126,7 @@
   <a class="back" href="index.html">← Back to all games</a>
 </div>
 
-<script src="arcade.js"></script>
+<script src="arcade.js?v=2"></script>
 <script>
 (() => {
   const LEN = 5, TRIES = 7, KEY = 'wordGuessBest';
